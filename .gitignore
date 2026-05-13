@@ -1,0 +1,14 @@
+# --- Compilación de Fortran ---
+*.o
+*.mod
+
+# --- Resultados y Checkpoints de Simulación ---
+*.dat
+*.vtk
+*.plt
+*.rst
+
+# --- Scripts auxiliares y Otros ---
+*.py
+*.sample
+__pycache__/
