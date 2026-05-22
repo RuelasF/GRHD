@@ -9,6 +9,5 @@
 *.rst
 
 # --- Scripts auxiliares y Otros ---
-*.py
 *.sample
 __pycache__/

@@ -4,7 +4,7 @@
 
 # Compilador y Banderas de optimización
 FC = gfortran
-FFLAGS = -O3 -fopenmp -march=native -flto=auto -fno-math-errno -fno-trapping-math
+FFLAGS = -O3 -fopenmp -march=native -flto=auto -fno-math-errno -fno-trapping-math -ffree-line-length-none
 #FFLAGS = -fopenmp -O0 -g -fbacktrace -Wall -Wextra -fcheck=all -finit-real=snan -ffpe-trap=invalid,zero,overflow,underflow,denormal
 
 # Nombre del ejecutable final
