@@ -348,15 +348,15 @@ contains
     integer :: i, j, k
     real*8  :: l_ang, W_in, W_r, enthalpy, ut_sq, r_loc
     real*8  :: alpha, beta(3), g(3,3)
-    real*8  :: g_tt, coord_in
+    real*8  :: g_tt, g_tphi, Omega, coord_in
+    ! Nuevas variables para el momento angular de Kerr
+    real*8  :: sq_Mr, num, den
 
     local_nx = size(prim_state, 2)
     local_ny = size(prim_state, 3)
     local_nz = size(prim_state, 4)
 
-    ! CORRECCIÓN 1:
-    ! Como calculate_metric espera la coordenada de la malla (y aplica el exp() adentro),
-    ! debemos mandarle r_in transformado para que coincidan los W_in.
+    ! 1. Transformación del radio para la evaluación correcta en la métrica
     if (use_log_r) then
       coord_in = log(r_in)
     else
@@ -365,31 +365,46 @@ contains
 
     call calculate_metric(coord_in, pi/2.0d0, alpha=alpha, beta=beta, gamma=g)
     
-    l_ang = sqrt(bh_mass * r_max_dens) / (1.0d0 - 2.0d0 * bh_mass / r_max_dens)
-    ! Adaptación estricta a la diagonal
-    g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2
-    ut_sq = (-g_tt * g(3,3)) / (g(3,3) + l_ang**2 * g_tt)
+    ! 2. CORRECCIÓN KERR: Momento angular específico Kepleriano dependiente del espín (a)
+    ! Asume que 'a_spin' y 'bh_mass' son accesibles globalmente desde tu módulo de parámetros
+    sq_Mr = sqrt(bh_mass * r_max_dens)
+    num = sq_Mr * (r_max_dens**2 - 2.0d0 * a_spin * sq_Mr + a_spin**2)
+    den = r_max_dens**2 - 2.0d0 * bh_mass * r_max_dens + a_spin * sq_Mr
+    l_ang = num / den
+
+    ! 3. GENERALIZACIÓN MÉTRICA PARA W_in
+    ! g_tt completo: -alpha^2 + gamma_ij * beta^i * beta^j
+    g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2 &
+         + 2.0d0*(g(1,2)*beta(1)*beta(2) + g(1,3)*beta(1)*beta(3) + g(2,3)*beta(2)*beta(3))
+
+    ! g_tphi: gamma_{i phi} * beta^i (asumiendo que phi es el índice 3)
+    g_tphi = g(1,3)*beta(1) + g(2,3)*beta(2) + g(3,3)*beta(3)
+
+    ! Fórmula general para u_t^2 incluyendo el término g_tphi
+    ut_sq = (g_tphi**2 - g_tt * g(3,3)) / (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt)
     W_in  = 0.5d0 * log(ut_sq)
 
-    !!$OMP PARALLEL DO PRIVATE(i, j, k, r_loc, g_tt, alpha, beta, g, ut_sq, W_r, enthalpy)
+    !!$OMP PARALLEL DO PRIVATE(i, j, k, r_loc, g_tt, g_tphi, Omega, alpha, beta, g, ut_sq, W_r, enthalpy)
     do k = 1, local_nz
       do j = 1, local_ny
         do i = 1, local_nx
           
-          ! Aquí recuperamos el radio físico real para evaluar la física local
           if (use_log_r) then
             r_loc = exp(x(i))
           else
             r_loc = x(i)
           end if
           
-          ! Usamos la caché de la métrica (que ya evaluó el radio correcto internamente)
+          ! Usamos la caché de la métrica
           alpha = alpha_c(i,j,k)
           beta(:) = beta_c(:,i,j,k)
           g(:,:) = gamma_c(:,:,i,j,k)
 
-          ! Adaptación estricta a la diagonal
-          g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2
+          ! --- GENERALIZACIÓN MÉTRICA LOCAL ---
+          g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2 &
+               + 2.0d0*(g(1,2)*beta(1)*beta(2) + g(1,3)*beta(1)*beta(3) + g(2,3)*beta(2)*beta(3))
+
+          g_tphi = g(1,3)*beta(1) + g(2,3)*beta(2) + g(3,3)*beta(3)
 
           ! Blindaje de frontera interna
           if (r_loc < r_in) then
@@ -399,8 +414,9 @@ contains
             cycle
           end if
 
-          if (g(3,3) + l_ang**2 * g_tt > 0.0d0) then
-            ut_sq = (-g_tt * g(3,3)) / (g(3,3) + l_ang**2 * g_tt)
+          ! Verificación de causalidad generalizada
+          if (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt > 0.0d0) then
+            ut_sq = (g_tphi**2 - g_tt * g(3,3)) / (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt)
           else
             ut_sq = -1.0d0 
           end if
@@ -414,9 +430,14 @@ contains
               prim_state(eq_de, i, j, k) = ((enthalpy - 1.0d0) * (adb_idx - 1.0d0) / (K_poly * adb_idx))**(1.0d0 / (adb_idx - 1.0d0))
               prim_state(eq_pr, i, j, k) = K_poly * prim_state(eq_de, i, j, k)**adb_idx
 
+              ! Calcular la velocidad angular generalizada Omega = u^phi / u^t
+              Omega = -(g_tphi + l_ang * g_tt) / (g(3,3) + l_ang * g_tphi)
+
+              ! Velocidades Eulerianas (v^i = u^i / (alpha u^t) + beta^i / alpha)
+              ! Para un flujo circular u^r = u^theta = 0
               prim_state(eq_vx, i, j, k) = beta(1) / alpha 
-              prim_state(eq_vy, i, j, k) = 0.0d0 
-              prim_state(eq_vz, i, j, k) = ( l_ang * (-g_tt) / g(3,3) + beta(3) ) / alpha
+              prim_state(eq_vy, i, j, k) = beta(2) / alpha
+              prim_state(eq_vz, i, j, k) = (Omega + beta(3)) / alpha
             else
               ! Vacío exterior (Atmósfera)
               prim_state(eq_de, i, j, k) = rho_floor
@@ -434,7 +455,9 @@ contains
     end do
     !!$OMP END PARALLEL DO
     
-    print *, ">>> Toro FM (Restricción Diagonal) configurado. Angular Mom. =", l_ang, "W_in =", W_in
+    print *, ">>> Toro FM configurado (Métrica Completa + Kerr Spin a=", a_spin, ")"
+    print *, "    Momento Angular (l) =", l_ang, " W_in =", W_in
+
   end subroutine setup_fishbone_moncrief_initial
 
   ! Subrutina: inject_pressure_noise

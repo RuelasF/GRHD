@@ -716,27 +716,27 @@ contains
   subroutine setup_fishbone_moncrief_equatorial()
     case_name = 'FishMoncEqu'
     geom_type = 'Spherical'
-    metric_type = 'Eddington-Finkelstein'
-    ! metric_type = 'Kerr-Schild'
-    use_shock_sensor = .true.
+    metric_type = 'Kerr-Schild'
+    use_shock_sensor = .false.
     ! do_mdot_extraction = .true.
     ! do_gw_extraction = .true.
-    ! use_log_r = .true.
+    use_log_r = .true.
 
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
+    a_spin = 0.9d0
     
     ! Caso original Ecuatorial (1D/2D en phi)
-    nx = 400 ; r_min = 1.0d0 ; r_max = 40.0d0
+    nx = 400 ; r_min = 2.0d0 ; r_max = 40.0d0
     ny = 1   ; y_min = 0     ; y_max = pi     ! Fijo en el ecuador
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0*pi
 
-    final_time = 1000.0d0
+    final_time = 500.0d0
     CFL = 0.4d0            
     save_interval = 10.0d0   
     
-    output_prefix = 'FM_Equ'
-    output_folder = 'FishboneMoncrief_Equatorial_Kerr'
+    output_prefix = 'FM_KS_a0.9d0'
+    output_folder = 'FM_KS_a0.9d0_data'
   end subroutine setup_fishbone_moncrief_equatorial
 
   subroutine setup_fishbone_moncrief_sagital()

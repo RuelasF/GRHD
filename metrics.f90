@@ -825,16 +825,19 @@ contains
     temp_det = (Sigma**2 * sin2 * (1.0d0 + 2.0d0 * H)) * r_phys**2
 
     ! 4. Métrica espacio-temporal completa LÓGICA contravariante (g^munu_log)
-    ! Los componentes contravariantes se transforman con derivadas inversas (multiplicando por r)
+    ! Los componentes contravariantes se transforman con derivadas inversas (DIVIDIENDO entre r)
     temp_gmunu = 0.0d0
     temp_gmunu(0,0) = -(1.0d0 + 2.0d0 * H)
     
-    temp_gmunu(0,1) = 2.0d0 * H * r_phys  ! g^xt = r * g^rt
+    ! g^xt = g^rt / r
+    temp_gmunu(0,1) = (2.0d0 * H) / r_phys
     temp_gmunu(1,0) = temp_gmunu(0,1)
     
-    temp_gmunu(1,1) = (Delta / Sigma) * r_phys**2  ! g^xx = r^2 * g^rr
+    ! g^xx = g^rr / r^2
+    temp_gmunu(1,1) = (Delta / Sigma) / (r_phys**2)
     
-    temp_gmunu(1,3) = (a / Sigma) * r_phys  ! g^xphi = r * g^rphi
+    ! g^xphi = g^rphi / r
+    temp_gmunu(1,3) = (a / Sigma) / r_phys
     temp_gmunu(3,1) = temp_gmunu(1,3)
     
     temp_gmunu(2,2) = 1.0d0 / Sigma

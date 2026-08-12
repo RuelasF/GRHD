@@ -1,12 +1,21 @@
 # --- Compilación de Fortran ---
 *.o
 *.mod
+grhd2
 
 # --- Resultados y Checkpoints de Simulación ---
 *.dat
 *.vtk
 *.plt
 *.rst
+*.log
+*.bak
+
+# --- Historial y salidas locales ---
+.history/
+*_data/
+FishboneMoncrief*/
+FM_*/
 
 # --- Scripts auxiliares y Otros ---
 *.sample
