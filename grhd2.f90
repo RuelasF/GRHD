@@ -51,7 +51,7 @@ program grhd2
     rho_floor = 1.0d-10
     p_floor   = rho_floor * 1.0d-3
     D_floor   = rho_floor
-    tau_floor = p_floor / (g1 - 1.0d0)
+    tau_floor = p_floor * (g1 - 1.0d0)
 
     call set_metric_type()
     call allocate_and_grid()

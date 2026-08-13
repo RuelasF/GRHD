@@ -276,6 +276,7 @@ contains
     real*8, intent(in) :: current_time
     integer :: unit_file, io_status
     character(len=100) :: file_name
+    character(len=12), parameter :: checkpoint_magic = 'GRHDCP_V2'
 
     write(file_name, '(A, "/checkpoint_", A, "_", I5.5, ".rst")') trim(output_folder), trim(scheme_name), int(current_time)
     print *, '>>> Guardando Checkpoint de Respaldo: ', trim(file_name)
@@ -283,6 +284,7 @@ contains
     unit_file = 20
     open(unit_file, file=file_name, status='replace', action='write', form='unformatted', iostat=io_status)
     if (io_status == 0) then
+      write(unit_file) checkpoint_magic
       ! Topología de malla 3D y profundidad de fantasmas
       write(unit_file) nghost, nx, ny, nz 
       
@@ -290,7 +292,7 @@ contains
       write(unit_file) r_min, r_max, y_min, y_max, z_min, z_max
       
       ! Física y Banderas Arquitectónicas (Actualizado con banderas de extracción)
-      write(unit_file) bh_mass, adb_idx
+      write(unit_file) bh_mass, adb_idx, a_spin
       write(unit_file) use_log_r, use_shock_sensor, do_gw_extraction, do_mdot_extraction
       write(unit_file) metric_type, geom_type
       
@@ -316,6 +318,14 @@ contains
 
   subroutine read_checkpoint_metadata(unit_file)
     integer, intent(in) :: unit_file
+    integer :: io_status
+    logical :: is_v2
+    character(len=12) :: checkpoint_magic
+    character(len=12), parameter :: checkpoint_magic_v2 = 'GRHDCP_V2'
+
+    read(unit_file, iostat=io_status) checkpoint_magic
+    is_v2 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v2)
+    if (.not. is_v2) rewind(unit_file)
 
     ! Topología de malla
     read(unit_file) nghost, nx, ny, nz
@@ -324,7 +334,13 @@ contains
     read(unit_file) r_min, r_max, y_min, y_max, z_min, z_max
     
     ! Física y Banderas Arquitectónicas (Actualizado con banderas de extracción)
-    read(unit_file) bh_mass, adb_idx
+    if (is_v2) then
+      read(unit_file) bh_mass, adb_idx, a_spin
+    else
+      read(unit_file) bh_mass, adb_idx
+      a_spin = 0.0d0
+      print *, 'WARNING: legacy checkpoint has no Kerr spin; assuming a = 0.'
+    end if
     read(unit_file) use_log_r, use_shock_sensor, do_gw_extraction, do_mdot_extraction
     read(unit_file) metric_type, geom_type
     

@@ -13,7 +13,7 @@ The default test is the equatorial Fishbone-Moncrief torus:
 - black-hole mass: (M = 1);
 - spin: (a = 0.9);
 - grid: (400 x 1 x 200);
-- radial domain: (r \in [2, 40]);
+- radial domain: (r \in [1.2, 40]);
 - final time: (t = 500);
 - reconstruction and Riemann solver: WENO5 and HLLE.
 

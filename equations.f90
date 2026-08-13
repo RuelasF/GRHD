@@ -97,7 +97,7 @@ contains
     integer, intent(in)   :: i, j, k
     real*8, intent(out)   :: prim_state(:)
     
-    real*8 :: W, V, dV
+    real*8 :: W, V, dV, v_sq_final
     real*8 :: E_tot, S_sq, S_sq_max, scale_factor
     real*8 :: local_D_floor, local_tau_floor
     real*8 :: g(3,3), ginv(3,3), sqg
@@ -110,15 +110,16 @@ contains
     sqg       = sqrt_gamma_c(i,j,k)
 
     local_D_floor   = rho_floor * sqg
-    local_tau_floor = p_floor * sqg
+    local_tau_floor = p_floor * (g1 - 1.0d0) * sqg
 
     ! --- ESCUDO PRE-INVERSIÓN ---
     if (cons_state(eq_de) <= local_D_floor) then
       prim_state(eq_de) = rho_floor
       prim_state(eq_pr) = p_floor
-      ! Mismo comportamiento que el código original: no tocamos prim_state(vx:vz)
+      prim_state(eq_vx:eq_vz) = 0.0d0
       cons_state(eq_de) = local_D_floor
       cons_state(eq_pr) = local_tau_floor
+      cons_state(eq_vx:eq_vz) = 0.0d0
       return
     end if
 
@@ -162,6 +163,16 @@ contains
     ! --- EXTRACCIÓN EXITOSA ---
     call eval_V_and_dV(W, cons_state, V, dV)
 
+    if (V <= 0.0d0 .or. isnan(V)) then
+      prim_state(eq_de) = rho_floor
+      prim_state(eq_pr) = p_floor
+      prim_state(eq_vx:eq_vz) = 0.0d0
+      cons_state(eq_de) = local_D_floor
+      cons_state(eq_pr) = local_tau_floor
+      cons_state(eq_vx:eq_vz) = 0.0d0
+      return
+    end if
+
     prim_state(eq_de) = cons_state(eq_de) / (W * sqg)
     prim_state(eq_pr) = (V - cons_state(eq_pr) - cons_state(eq_de)) / sqg
     
@@ -172,10 +183,17 @@ contains
     prim_state(eq_vz) = (ginv(3,1)*cons_state(eq_vx) + ginv(3,2)*cons_state(eq_vy) + ginv(3,3)*cons_state(eq_vz)) / V
 
     ! --- SANEAMIENTO FINAL ---
-    if (prim_state(eq_de) < rho_floor) prim_state(eq_de) = rho_floor
-    if (prim_state(eq_pr) < p_floor)   prim_state(eq_pr) = p_floor
+    v_sq_final = 0.0d0
+    do ii = 1, 3
+      do jj = 1, 3
+        v_sq_final = v_sq_final + g(ii,jj) * prim_state(eq_vx + ii - 1) * prim_state(eq_vx + jj - 1)
+      end do
+    end do
 
-    if (isnan(prim_state(eq_de)) .or. isnan(prim_state(eq_pr)) .or. isnan(prim_state(eq_vx))) then
+    if (prim_state(eq_de) < rho_floor .or. prim_state(eq_pr) < p_floor .or. &
+        isnan(prim_state(eq_de)) .or. isnan(prim_state(eq_pr)) .or. &
+        isnan(prim_state(eq_vx)) .or. isnan(prim_state(eq_vy)) .or. isnan(prim_state(eq_vz)) .or. &
+        isnan(v_sq_final) .or. v_sq_final >= v_max) then
       prim_state(eq_de) = rho_floor
       prim_state(eq_pr) = p_floor
       prim_state(eq_vx:eq_vz) = 0.0d0

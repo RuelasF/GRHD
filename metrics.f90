@@ -900,7 +900,7 @@ contains
     ! Componentes físicas puras requeridas para derivar los productos (Regla de Leibniz)
     g_tr_phys = 2.0d0 * H
     g_rr_phys = 1.0d0 + 2.0d0 * H
-    g_rphi_phys = -2.0d0 * a * sin2 * H
+    g_rphi_phys = -a * (1.0d0 + 2.0d0 * H) * sin2
     
     dg = 0.0d0
     

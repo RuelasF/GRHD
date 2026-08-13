@@ -125,7 +125,7 @@ contains
   ! Genera la malla computacional utilizando topología 'Cell-Centered'.
   subroutine allocate_and_grid()
     integer :: i, j, k
-    real*8 :: min_dist, r_horizon_coord
+    real*8 :: min_dist, r_horizon_coord, r_horizon_phys
 
     ! Límites lógicos (computacionales) dependientes de la malla
     if (use_log_r) then
@@ -160,11 +160,20 @@ contains
     ! Localizador de sondas para Agujeros Negros
     ! -------------------------------------------------------------
     if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
+      if (trim(metric_type) == 'Kerr-Schild') then
+        if (abs(a_spin) > bh_mass) then
+          print *, 'CRITICAL ERROR: Kerr spin must satisfy |a| <= M.'
+          stop
+        end if
+        r_horizon_phys = bh_mass + sqrt(bh_mass**2 - a_spin**2)
+      else
+        r_horizon_phys = 2.0d0 * bh_mass
+      end if
       ! Adaptamos la coordenada de búsqueda a la topología elegida
       if (use_log_r) then
-         r_horizon_coord = log(2.0d0 * bh_mass)
+         r_horizon_coord = log(r_horizon_phys)
       else
-         r_horizon_coord = 2.0d0 * bh_mass
+         r_horizon_coord = r_horizon_phys
       end if
       
       min_dist = 1000.0d0
@@ -468,7 +477,7 @@ contains
     rho_floor = 1.0d-10
     p_floor   = rho_floor * 1.0d-3
     D_floor   = rho_floor
-    tau_floor = p_floor / (g1 - 1.0d0)
+    tau_floor = p_floor * (g1 - 1.0d0)
 
     ! 3. ARQUITECTURA NUMÉRICA (Define 'scheme_name' y 'nghost')
     call choose_numerical_architecture() 
@@ -727,7 +736,7 @@ contains
     a_spin = 0.9d0
     
     ! Caso original Ecuatorial (1D/2D en phi)
-    nx = 400 ; r_min = 2.0d0 ; r_max = 40.0d0
+    nx = 400 ; r_min = 1.2d0 ; r_max = 40.0d0
     ny = 1   ; y_min = 0     ; y_max = pi     ! Fijo en el ecuador
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0*pi
 
