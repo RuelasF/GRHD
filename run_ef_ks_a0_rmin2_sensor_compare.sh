@@ -11,7 +11,7 @@ build_jobs="${BUILD_JOBS:-4}"
 omp_threads="${OMP_NUM_THREADS:-4}"
 python_command="${PYTHON_COMMAND:-python}"
 plot_script="${PLOT_SCRIPT:-plot_fm_profiles.py}"
-campaign_log="${CAMPAIGN_LOG:-log_FM_EFKS_compare_a0_rmin2_sensor_campaign.txt}"
+campaign_log="${CAMPAIGN_LOG:-log_FM_EFKS_a0_rmin2_sensor_compare_v2_campaign.txt}"
 
 metric_tags=(EF KS)
 metric_names=(Eddington-Finkelstein Kerr-Schild)
@@ -94,13 +94,13 @@ if [[ -e "$campaign_log" ]]; then
 fi
 
 for tag in "${metric_tags[@]}"; do
-  prefix="FM_EFKS_compare_${tag}_a0_rmin2_sensor"
-  folder="${prefix}_data"
-  log_file="log_${prefix}.txt"
-  plot_file="perfil_radial_${prefix}_T1000.png"
+  artifact_id="FM_EFKS_a0_rmin2_sensor_v2_${tag}"
+  folder="${artifact_id}_data"
+  log_file="log_${artifact_id}.txt"
+  plot_file="perfil_radial_${artifact_id}_T1000.png"
 
   if [[ -e "$folder" || -e "$log_file" || -e "$plot_file" ]]; then
-    echo "ERROR: refusing to overwrite existing output, log, or plot for ${prefix}." >&2
+    echo "ERROR: refusing to overwrite existing output, log, or plot for ${artifact_id}." >&2
     exit 1
   fi
 done
@@ -110,10 +110,11 @@ exec > >(tee -- "$campaign_log") 2>&1
 for index in "${!metric_tags[@]}"; do
   tag="${metric_tags[$index]}"
   metric="${metric_names[$index]}"
-  prefix="FM_EFKS_compare_${tag}_a0_rmin2_sensor"
-  folder="${prefix}_data"
-  log_file="log_${prefix}.txt"
-  plot_file="perfil_radial_${prefix}_T1000.png"
+  artifact_id="FM_EFKS_a0_rmin2_sensor_v2_${tag}"
+  vtk_prefix="FM_${tag}_a0_r2s"
+  folder="${artifact_id}_data"
+  log_file="log_${artifact_id}.txt"
+  plot_file="perfil_radial_${artifact_id}_T1000.png"
 
   cp -p -- "$backup_file" "$source_file"
   sed -i -E \
@@ -121,7 +122,7 @@ for index in "${!metric_tags[@]}"; do
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*use_shock_sensor[[:space:]]*=.*/    use_shock_sensor = .true./" \
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*a_spin[[:space:]]*=.*/    a_spin = 0.0d0/" \
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/(r_min[[:space:]]*=[[:space:]]*)[^;]*/\12.0d0 /" \
-    -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*output_prefix[[:space:]]*=.*/    output_prefix = '${prefix}'/" \
+    -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*output_prefix[[:space:]]*=.*/    output_prefix = '${vtk_prefix}'/" \
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*output_folder[[:space:]]*=.*/    output_folder = '${folder}'/" \
     "$source_file"
 
@@ -131,10 +132,10 @@ for index in "${!metric_tags[@]}"; do
   [[ "$(extract_fm_assignment use_shock_sensor)" == "    use_shock_sensor = .true." ]]
   [[ "$(extract_fm_assignment a_spin)" == "    a_spin = 0.0d0" ]]
   [[ "$(extract_fm_assignment nx)" == "    nx = 400 ; r_min = 2.0d0 ; r_max = 40.0d0" ]]
-  [[ "$(extract_fm_assignment output_prefix)" == "    output_prefix = '${prefix}'" ]]
+  [[ "$(extract_fm_assignment output_prefix)" == "    output_prefix = '${vtk_prefix}'" ]]
   [[ "$(extract_fm_assignment output_folder)" == "    output_folder = '${folder}'" ]]
 
-  echo "=== ${prefix}: starting with OMP_NUM_THREADS=${omp_threads} ==="
+  echo "=== ${artifact_id}: starting with OMP_NUM_THREADS=${omp_threads} ==="
   make clean
   make -j"${build_jobs}"
   OMP_NUM_THREADS="$omp_threads" ./grhd2 2>&1 | tee -- "$log_file"
@@ -148,8 +149,8 @@ for index in "${!metric_tags[@]}"; do
     exit 1
   fi
 
-  echo "=== ${prefix}: radial profile saved to ${plot_file} ==="
-  echo "=== ${prefix} completed ==="
+  echo "=== ${artifact_id}: radial profile saved to ${plot_file} ==="
+  echo "=== ${artifact_id} completed ==="
 done
 
 echo "EF/KS a=0 r_min=2 shock-sensor comparison completed."
