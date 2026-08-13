@@ -10,10 +10,20 @@ source_file="initialization.f90"
 build_jobs="${BUILD_JOBS:-4}"
 omp_threads="${OMP_NUM_THREADS:-4}"
 campaign_log="${CAMPAIGN_LOG:-log_FM_KS_metricfix_campaign.txt}"
+python_command="${PYTHON_COMMAND:-python}"
+plot_script="${PLOT_SCRIPT:-plot_fm_profiles.py}"
 spins=(0.0d0 0.2d0 0.5d0 0.9d0)
 
 if [[ ! -f "$source_file" ]]; then
   echo "ERROR: run this script from the GRHD source directory." >&2
+  exit 1
+fi
+if [[ ! -f "$plot_script" ]]; then
+  echo "ERROR: radial-profile script not found: $plot_script" >&2
+  exit 1
+fi
+if ! MPLBACKEND=Agg "$python_command" -c 'import matplotlib, numpy, pyvista'; then
+  echo "ERROR: Python plotting dependencies are not available." >&2
   exit 1
 fi
 
@@ -75,9 +85,10 @@ for spin in "${spins[@]}"; do
   prefix="FM_KS_metricfix_a${spin_tag}"
   folder="${prefix}_data"
   log_file="log_${prefix}.txt"
+  plot_file="${prefix}_perfil_radial.png"
 
-  if [[ -e "$folder" || -e "$log_file" ]]; then
-    echo "ERROR: refusing to overwrite existing output or log for ${prefix}." >&2
+  if [[ -e "$folder" || -e "$log_file" || -e "$plot_file" ]]; then
+    echo "ERROR: refusing to overwrite existing output, log, or plot for ${prefix}." >&2
     exit 1
   fi
 done
@@ -90,6 +101,7 @@ for spin in "${spins[@]}"; do
   prefix="FM_KS_metricfix_a${spin_tag}"
   folder="${prefix}_data"
   log_file="log_${prefix}.txt"
+  plot_file="${prefix}_perfil_radial.png"
 
   cp -p -- "$backup_file" "$source_file"
   sed -i -E \
@@ -112,6 +124,17 @@ for spin in "${spins[@]}"; do
   make clean
   make -j"${build_jobs}"
   OMP_NUM_THREADS="$omp_threads" ./grhd2 2>&1 | tee -- "$log_file"
+
+  MPLBACKEND=Agg "$python_command" "$plot_script" \
+    "${folder}/*/*.vtk" \
+    --nx 400 --frames 1000 --xlim 1 40 --ylim -0.05 1.2 \
+    --output "$plot_file" --no-show
+  if [[ ! -s "$plot_file" ]]; then
+    echo "ERROR: radial-profile plot was not created: $plot_file" >&2
+    exit 1
+  fi
+
+  echo "=== ${prefix}: radial profile saved to ${plot_file} ==="
   echo "=== ${prefix} completed ==="
 done
 
