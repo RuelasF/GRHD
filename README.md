@@ -14,7 +14,7 @@ The default test is the equatorial Fishbone-Moncrief torus:
 - spin: (a = 0.9);
 - grid: (400 x 1 x 200);
 - radial domain: (r \in [1.2, 40]);
-- final time: (t = 500);
+- final time: (t = 1000);
 - reconstruction and Riemann solver: WENO5 and HLLE.
 
 The remaining test cases preserve their own metric and output settings. Do not

@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Controlled Fishbone--Moncrief Kerr--Schild spin sweep.
 #
-# It preserves the source tree: initialization.f90 is restored on exit even
-# if the session is interrupted.  r_min=2 reproduces the legacy campaign so
-# any difference can be attributed to the corrected metric/inversion code.
+# The base setup is preserved; only a_spin and output_folder are changed.
+# initialization.f90 is restored from an exact backup at the end of the sweep.
 
 set -euo pipefail
 
 source_file="initialization.f90"
 build_jobs="${BUILD_JOBS:-4}"
 omp_threads="${OMP_NUM_THREADS:-4}"
+campaign_log="${CAMPAIGN_LOG:-log_FM_KS_metricfix_campaign.txt}"
 spins=(0.0d0 0.2d0 0.5d0 0.9d0)
-legacy_r_min="2.0d0"
 
 if [[ ! -f "$source_file" ]]; then
   echo "ERROR: run this script from the GRHD source directory." >&2
@@ -19,13 +18,56 @@ if [[ ! -f "$source_file" ]]; then
 fi
 
 backup_file="$(mktemp ./initialization.f90.sweep.XXXXXX)"
-cp "$source_file" "$backup_file"
+diff_file="$(mktemp ./initialization.f90.diff.XXXXXX)"
+cp -p -- "$source_file" "$backup_file"
 
 restore_source() {
-  cp "$backup_file" "$source_file"
-  rm -f "$backup_file"
+  if [[ -e "$backup_file" ]]; then
+    mv -f -- "$backup_file" "$source_file"
+  fi
+  rm -f -- "$diff_file"
 }
-trap restore_source EXIT INT TERM
+
+on_interrupt() {
+  local signal_number="$1"
+  exit "$((128 + signal_number))"
+}
+
+validate_temporary_diff() {
+  local status=0
+
+  diff -u --label initialization.f90.before --label initialization.f90.temporary \
+    "$backup_file" "$source_file" > "$diff_file" || status=$?
+  if (( status > 1 )); then
+    echo "ERROR: could not inspect the temporary initialization.f90 diff." >&2
+    return 1
+  fi
+
+  if ! awk '
+    /^--- / || /^\+\+\+ / || /^@@/ || /^[^+-]/ { next }
+    {
+      line = substr($0, 2)
+      if (line !~ /^[[:space:]]*a_spin[[:space:]]*=/ &&
+          line !~ /^[[:space:]]*output_folder[[:space:]]*=/) {
+        print "UNAUTHORIZED TEMPORARY DIFF: " $0 > "/dev/stderr"
+        bad = 1
+      }
+    }
+    END { exit bad }
+  ' "$diff_file"; then
+    echo "ERROR: initialization.f90 changed outside a_spin/output_folder; aborting." >&2
+    return 1
+  fi
+}
+
+trap restore_source EXIT
+trap 'on_interrupt 2' INT
+trap 'on_interrupt 15' TERM
+
+if [[ -e "$campaign_log" ]]; then
+  echo "ERROR: campaign log already exists: $campaign_log" >&2
+  exit 1
+fi
 
 for spin in "${spins[@]}"; do
   spin_tag="${spin%.0d0}"
@@ -34,19 +76,42 @@ for spin in "${spins[@]}"; do
   folder="${prefix}_data"
   log_file="log_${prefix}.txt"
 
-  cp "$backup_file" "$source_file"
+  if [[ -e "$folder" || -e "$log_file" ]]; then
+    echo "ERROR: refusing to overwrite existing output or log for ${prefix}." >&2
+    exit 1
+  fi
+done
+
+exec > >(tee -- "$campaign_log") 2>&1
+
+for spin in "${spins[@]}"; do
+  spin_tag="${spin%.0d0}"
+  spin_tag="${spin_tag%d0}"
+  prefix="FM_KS_metricfix_a${spin_tag}"
+  folder="${prefix}_data"
+  log_file="log_${prefix}.txt"
+
+  cp -p -- "$backup_file" "$source_file"
   sed -i -E \
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*a_spin[[:space:]]*=.*/    a_spin = ${spin}/" \
-    -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*nx[[:space:]]*=.*/    nx = 400 ; r_min = ${legacy_r_min} ; r_max = 40.0d0/" \
-    -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*final_time[[:space:]]*=.*/    final_time = 1000.0d0/" \
-    -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*output_prefix[[:space:]]*=.*/    output_prefix = '${prefix}'/" \
     -e "/subroutine setup_fishbone_moncrief_equatorial\(\)/,/end subroutine setup_fishbone_moncrief_equatorial/ s/^[[:space:]]*output_folder[[:space:]]*=.*/    output_folder = '${folder}'/" \
     "$source_file"
 
-  echo "=== ${prefix}: T=1000, r_min=${legacy_r_min}, OMP=${omp_threads} ==="
+  validate_temporary_diff
+
+  if [[ "$(sed -n '/subroutine setup_fishbone_moncrief_equatorial()/,/end subroutine setup_fishbone_moncrief_equatorial/ { /^[[:space:]]*a_spin[[:space:]]*=/p; }' "$source_file")" != "    a_spin = ${spin}" ]]; then
+    echo "ERROR: a_spin was not set exactly once inside the FM equatorial setup." >&2
+    exit 1
+  fi
+  if [[ "$(sed -n '/subroutine setup_fishbone_moncrief_equatorial()/,/end subroutine setup_fishbone_moncrief_equatorial/ { /^[[:space:]]*output_folder[[:space:]]*=/p; }' "$source_file")" != "    output_folder = '${folder}'" ]]; then
+    echo "ERROR: output_folder was not set exactly once inside the FM equatorial setup." >&2
+    exit 1
+  fi
+
+  echo "=== ${prefix}: starting with OMP_NUM_THREADS=${omp_threads} ==="
   make clean
   make -j"${build_jobs}"
-  OMP_NUM_THREADS="$omp_threads" ./grhd2 > "$log_file" 2>&1
+  OMP_NUM_THREADS="$omp_threads" ./grhd2 2>&1 | tee -- "$log_file"
   echo "=== ${prefix} completed ==="
 done
 

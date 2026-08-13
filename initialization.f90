@@ -740,7 +740,7 @@ contains
     ny = 1   ; y_min = 0     ; y_max = pi     ! Fijo en el ecuador
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0*pi
 
-    final_time = 500.0d0
+    final_time = 1000.0d0
     CFL = 0.4d0            
     save_interval = 10.0d0   
     
