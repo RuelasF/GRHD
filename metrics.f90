@@ -26,7 +26,8 @@ module metrics
   ! ========================================================================
   public :: calculate_metric, calculate_christoffel_symbols, &
             calculate_metric_derivatives, calculate_stress_energy_tensor, &
-            set_metric_type
+            set_metric_type, event_horizon_radius, &
+            eulerian_to_coordinate_rates, ks_spherical_to_cartesian
 
   ! ========================================================================
   ! INTERFACES ABSTRACTAS (Plantillas para los punteros de función)
@@ -61,6 +62,91 @@ module metrics
   procedure(i_metric_derivs), pointer :: calculate_metric_derivatives => null()
 
 contains
+
+  ! ========================================================================
+  ! UTILIDADES GEOMÉTRICAS COMUNES
+  ! ========================================================================
+
+  function event_horizon_radius(mass, spin) result(r_plus)
+    implicit none
+    real*8, intent(in) :: mass, spin
+    real*8 :: r_plus, discriminant, roundoff_tolerance
+
+    if (mass < 0.0d0) then
+      write(*,*) 'CRITICAL ERROR: black-hole mass must be non-negative.'
+      error stop 1
+    end if
+
+    roundoff_tolerance = 64.0d0 * epsilon(1.0d0) * &
+                         max(1.0d0, mass**2, spin**2)
+    discriminant = mass**2 - spin**2
+    if (discriminant < -roundoff_tolerance) then
+      write(*,*) 'CRITICAL ERROR: Kerr spin must satisfy |a| <= M.'
+      write(*,*) 'M = ', mass, ', a = ', spin
+      error stop 1
+    end if
+
+    ! max() tolera únicamente un exceso de |a| sobre M al nivel de redondeo.
+    r_plus = mass + sqrt(max(0.0d0, discriminant))
+  end function event_horizon_radius
+
+
+  subroutine eulerian_to_coordinate_rates(r_phys, alpha, beta, velocity, &
+                                           logarithmic_r, coordinate_rates)
+    implicit none
+    real*8, intent(in) :: r_phys, alpha
+    real*8, intent(in) :: beta(3), velocity(3)
+    logical, intent(in) :: logarithmic_r
+    real*8, intent(out) :: coordinate_rates(3)
+
+    ! Las primitivas del código son velocidades eulerianas:
+    ! v^i = u^i/(alpha*u^t) + beta^i/alpha. Por tanto,
+    ! dq^i/dt = u^i/u^t = alpha*v^i - beta^i.
+    coordinate_rates = alpha * velocity - beta
+
+    ! En una malla x=ln(r), la primera componente es dx/dt; la rutina de
+    ! transformación cartesiana necesita dr/dt = r*dx/dt.
+    if (logarithmic_r) coordinate_rates(1) = r_phys * coordinate_rates(1)
+  end subroutine eulerian_to_coordinate_rates
+
+
+  subroutine ks_spherical_to_cartesian(r_phys, theta, phi, spin, &
+                                       coordinate_rates, position, velocity, &
+                                       flat_jacobian)
+    implicit none
+    real*8, intent(in) :: r_phys, theta, phi, spin
+    real*8, intent(in) :: coordinate_rates(3)
+    real*8, intent(out) :: position(3), velocity(3), flat_jacobian
+    real*8 :: sin_theta, cos_theta, sin_phi, cos_phi, sigma
+    real*8 :: r_dot, theta_dot, phi_dot
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    sin_phi = sin(phi)
+    cos_phi = cos(phi)
+    r_dot = coordinate_rates(1)
+    theta_dot = coordinate_rates(2)
+    phi_dot = coordinate_rates(3)
+
+    ! Coordenadas cartesianas Kerr--Schild compatibles con
+    ! gamma_{r phi}(M=0) = -a sin(theta)^2 en metric_ks_phys.
+    position(1) = (r_phys * cos_phi - spin * sin_phi) * sin_theta
+    position(2) = (r_phys * sin_phi + spin * cos_phi) * sin_theta
+    position(3) = r_phys * cos_theta
+
+    velocity(1) = r_dot * cos_phi * sin_theta &
+                + theta_dot * (r_phys * cos_phi - spin * sin_phi) * cos_theta &
+                - phi_dot * (r_phys * sin_phi + spin * cos_phi) * sin_theta
+    velocity(2) = r_dot * sin_phi * sin_theta &
+                + theta_dot * (r_phys * sin_phi + spin * cos_phi) * cos_theta &
+                + phi_dot * (r_phys * cos_phi - spin * sin_phi) * sin_theta
+    velocity(3) = r_dot * cos_theta - r_phys * theta_dot * sin_theta
+
+    ! Jacobiano de (r,theta,phi) a las coordenadas cartesianas KS. Para
+    ! a=0 recupera r^2 sin(theta).
+    sigma = r_phys**2 + spin**2 * cos_theta**2
+    flat_jacobian = sigma * sin_theta
+  end subroutine ks_spherical_to_cartesian
 
   ! ========================================================================
   ! INICIALIZADOR DE LA MÉTRICA (LLAMADO UNA VEZ EN EL ARRANQUE)

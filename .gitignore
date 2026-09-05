@@ -2,6 +2,9 @@
 *.o
 *.mod
 grhd2
+tests/test_hllc_fluxes
+tests/test_gw_geometry
+tests/test_gw_stress
 
 # --- Resultados y Checkpoints de Simulación ---
 *.dat
@@ -16,7 +19,11 @@ grhd2
 *_data/
 FishboneMoncrief*/
 FM_*/
+AdvectedWave_*/
+EFKS_comparison_logs_and_figures/
 
 # --- Scripts auxiliares y Otros ---
 *.sample
 __pycache__/
+nohup.out
+log_*.txt

@@ -12,15 +12,198 @@ module initialization
   use fluxes
   implicit none
   private
-  public :: initialize_problem, choose_numerical_architecture, allocate_and_grid, precalculate_metric_cache
+  public :: initialize_problem, choose_numerical_architecture, allocate_and_grid, &
+            precalculate_metric_cache, apply_startup_overrides, apply_control_overrides
 
 contains
+
+  subroutine override_integer_from_environment(variable_name, value, was_set)
+    character(len=*), intent(in) :: variable_name
+    integer, intent(inout) :: value
+    logical, intent(out), optional :: was_set
+    character(len=256) :: buffer
+    integer :: env_length, env_status, io_status, parsed_value
+
+    if (present(was_set)) was_set = .false.
+    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
+    if (env_status == 1) return
+    if (env_status /= 0 .or. env_length <= 0) then
+      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
+      error stop 1
+    end if
+
+    read(buffer(1:env_length), *, iostat=io_status) parsed_value
+    if (io_status /= 0) then
+      write(*,'(A,1X,A,1X,A)') 'Invalid integer environment variable:', &
+                               trim(variable_name), trim(buffer(1:env_length))
+      error stop 1
+    end if
+    value = parsed_value
+    if (present(was_set)) was_set = .true.
+  end subroutine override_integer_from_environment
+
+
+  subroutine override_real_from_environment(variable_name, value)
+    character(len=*), intent(in) :: variable_name
+    real*8, intent(inout) :: value
+    character(len=256) :: buffer
+    integer :: env_length, env_status, io_status
+    real*8 :: parsed_value
+
+    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
+    if (env_status == 1) return
+    if (env_status /= 0 .or. env_length <= 0) then
+      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
+      error stop 1
+    end if
+
+    read(buffer(1:env_length), *, iostat=io_status) parsed_value
+    if (io_status /= 0) then
+      write(*,'(A,1X,A,1X,A)') 'Invalid real environment variable:', &
+                               trim(variable_name), trim(buffer(1:env_length))
+      error stop 1
+    end if
+    value = parsed_value
+  end subroutine override_real_from_environment
+
+
+  subroutine override_string_from_environment(variable_name, value)
+    character(len=*), intent(in) :: variable_name
+    character(len=*), intent(inout) :: value
+    character(len=256) :: buffer
+    integer :: env_length, env_status
+
+    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
+    if (env_status == 1) return
+    if (env_status /= 0 .or. env_length <= 0 .or. env_length > len(value)) then
+      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
+      error stop 1
+    end if
+    value = buffer(1:env_length)
+  end subroutine override_string_from_environment
+
+
+  subroutine override_logical_from_environment(variable_name, value)
+    character(len=*), intent(in) :: variable_name
+    logical, intent(inout) :: value
+    character(len=256) :: buffer
+    integer :: env_length, env_status
+
+    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
+    if (env_status == 1) return
+    if (env_status /= 0 .or. env_length <= 0) then
+      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
+      error stop 1
+    end if
+
+    select case(trim(adjustl(buffer(1:env_length))))
+    case('1', 'true', 'TRUE', 'True', '.true.', '.TRUE.', 'yes', 'YES')
+      value = .true.
+    case('0', 'false', 'FALSE', 'False', '.false.', '.FALSE.', 'no', 'NO')
+      value = .false.
+    case default
+      write(*,'(A,1X,A,1X,A)') 'Invalid logical environment variable:', &
+                               trim(variable_name), trim(buffer(1:env_length))
+      error stop 1
+    end select
+  end subroutine override_logical_from_environment
+
+
+  subroutine apply_startup_overrides()
+    call override_logical_from_environment('GRHD_DO_RESTART', do_restart)
+    call override_string_from_environment('GRHD_RESTART_FILE', restart_file)
+  end subroutine apply_startup_overrides
+
+
+  subroutine apply_control_overrides()
+    call override_real_from_environment('GRHD_FINAL_TIME', final_time)
+    call override_real_from_environment('GRHD_CFL', CFL)
+    call override_real_from_environment('GRHD_SAVE_INTERVAL', save_interval)
+    call override_string_from_environment('GRHD_OUTPUT_PREFIX', output_prefix)
+    call override_string_from_environment('GRHD_OUTPUT_FOLDER', output_folder)
+    call override_logical_from_environment('GRHD_USE_SHOCK_SENSOR', use_shock_sensor)
+
+    call override_logical_from_environment('GRHD_DO_GW_EXTRACTION', do_gw_extraction)
+    call override_logical_from_environment('GRHD_DO_MDOT_EXTRACTION', do_mdot_extraction)
+    call override_logical_from_environment('GRHD_DO_PPI_DIAGNOSTICS', do_ppi_diagnostics)
+
+    call override_logical_from_environment('GRHD_APPLY_PERTURBATION', apply_perturbation)
+    call override_integer_from_environment('GRHD_PERTURBATION_TYPE', perturbation_type)
+    call override_integer_from_environment('GRHD_PERTURBATION_SEED', perturbation_seed)
+    call override_integer_from_environment('GRHD_DIAGNOSTIC_STRIDE', diagnostic_stride)
+    call override_real_from_environment('GRHD_PERTURBATION_TIME', perturbation_time)
+    call override_real_from_environment('GRHD_PERTURBATION_AMPLITUDE', perturbation_amplitude)
+    call override_real_from_environment('GRHD_PERTURBATION_MODE', perturbation_mode)
+
+    if (final_time < 0.0d0 .or. CFL <= 0.0d0 .or. save_interval <= 0.0d0) then
+      write(*,*) 'Invalid runtime control: require final_time >= 0, CFL > 0 and save_interval > 0.'
+      error stop 1
+    end if
+    if (diagnostic_stride < 1 .or. perturbation_seed < 0 .or. &
+        perturbation_time < 0.0d0 .or. perturbation_amplitude < 0.0d0 .or. &
+        perturbation_amplitude >= 1.0d0) then
+      write(*,*) 'Invalid perturbation or diagnostic runtime control.'
+      error stop 1
+    end if
+    if (perturbation_type < PERT_NONE .or. perturbation_type > PERT_DENSITY_MODE) then
+      write(*,*) 'Invalid perturbation type. Use 0:none, 1:pressure noise, 2:density noise, 3:density mode.'
+      error stop 1
+    end if
+    if (perturbation_type == PERT_NONE) apply_perturbation = .false.
+  end subroutine apply_control_overrides
+
+
+  subroutine apply_runtime_overrides()
+    call override_string_from_environment('GRHD_METRIC_TYPE', metric_type)
+    ! EF es Schwarzschild y, por definición, usa a=0. Esto también evita que
+    ! el a_spin=0.9 del setup KS se filtre al inicializador FM al comparar EF.
+    if (trim(metric_type) == 'Eddington-Finkelstein') a_spin = 0.0d0
+    call override_real_from_environment('GRHD_A_SPIN', a_spin)
+
+    call override_integer_from_environment('GRHD_NX', nx)
+    call override_integer_from_environment('GRHD_NY', ny)
+    call override_integer_from_environment('GRHD_NZ', nz)
+    call override_real_from_environment('GRHD_R_MIN', r_min)
+    call override_real_from_environment('GRHD_R_MAX', r_max)
+    call override_logical_from_environment('GRHD_USE_LOG_R', use_log_r)
+    call apply_control_overrides()
+
+    if (nx < 1 .or. ny < 1 .or. nz < 1 .or. r_max <= r_min) then
+      write(*,*) 'Invalid grid override: require positive dimensions and r_max > r_min.'
+      error stop 1
+    end if
+    if (use_log_r .and. r_min <= 0.0d0) then
+      write(*,*) 'Invalid logarithmic grid: r_min must be positive.'
+      error stop 1
+    end if
+    select case(trim(metric_type))
+    case('Minkowski')
+      if (abs(a_spin) > 0.0d0) then
+        write(*,*) 'Invalid spin: Minkowski requires a_spin = 0.'
+        error stop 1
+      end if
+    case('Eddington-Finkelstein')
+      if (abs(a_spin) > 0.0d0) then
+        write(*,*) 'Invalid spin: Eddington-Finkelstein is Schwarzschild and requires a_spin = 0.'
+        error stop 1
+      end if
+    case('Kerr-Schild')
+      if (abs(a_spin) > bh_mass + 64.0d0 * epsilon(1.0d0) * max(1.0d0, bh_mass)) then
+        write(*,*) 'Invalid Kerr spin: require |a_spin| <= bh_mass.'
+        error stop 1
+      end if
+    case default
+      write(*,*) 'Invalid metric override: ', trim(metric_type)
+      error stop 1
+    end select
+  end subroutine apply_runtime_overrides
 
   ! Subrutina: choose_numerical_architecture
   ! Menú interactivo para definir la arquitectura espacial completa.
   ! Asigna los IDs numéricos del Reconstructor y del Solucionador de Riemann.
   subroutine choose_numerical_architecture()
     integer :: choice_rec, choice_limiter, choice_solver
+    logical :: limiter_from_environment
 
     ! --- 1. SELECCIÓN DEL RECONSTRUCTOR ---
     print *, "=========================================="
@@ -34,6 +217,7 @@ contains
     ! RECORDATORIO: Descomentar para producción interactiva
     ! read *, choice_rec
     choice_rec = 5
+    call override_integer_from_environment('GRHD_RECONSTRUCTION', choice_rec)
 
     select case(choice_rec)
     case(1)
@@ -48,7 +232,10 @@ contains
       print *, "1. Minmod (Disipativo, estable)"
       print *, "2. Superbee (Compresivo, choques afilados)"
       print *, "3. MC (Estandar TVD, balanceado)"
-      read *, choice_limiter
+      choice_limiter = 3
+      call override_integer_from_environment('GRHD_TVD_LIMITER', choice_limiter, &
+                                             limiter_from_environment)
+      if (.not. limiter_from_environment) read *, choice_limiter
 
       select case(choice_limiter)
       case(1)
@@ -92,6 +279,7 @@ contains
     ! RECORDATORIO: Descomentar para producción interactiva
     ! read *, choice_solver
     choice_solver = 1
+    call override_integer_from_environment('GRHD_RIEMANN_SOLVER', choice_solver)
 
     select case(choice_solver)
     case(1)
@@ -125,7 +313,7 @@ contains
   ! Genera la malla computacional utilizando topología 'Cell-Centered'.
   subroutine allocate_and_grid()
     integer :: i, j, k
-    real*8 :: min_dist, r_horizon_coord, r_horizon_phys
+    real*8 :: min_dist, r_horizon_coord, r_horizon_phys, horizon_spin
 
     ! Límites lógicos (computacionales) dependientes de la malla
     if (use_log_r) then
@@ -160,15 +348,11 @@ contains
     ! Localizador de sondas para Agujeros Negros
     ! -------------------------------------------------------------
     if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
-      if (trim(metric_type) == 'Kerr-Schild') then
-        if (abs(a_spin) > bh_mass) then
-          print *, 'CRITICAL ERROR: Kerr spin must satisfy |a| <= M.'
-          stop
-        end if
-        r_horizon_phys = bh_mass + sqrt(bh_mass**2 - a_spin**2)
-      else
-        r_horizon_phys = 2.0d0 * bh_mass
-      end if
+      ! EF representa Schwarzschild (a=0); KS admite el Kerr general.
+      horizon_spin = 0.0d0
+      if (trim(metric_type) == 'Kerr-Schild') horizon_spin = a_spin
+      r_horizon_phys = event_horizon_radius(bh_mass, horizon_spin)
+
       ! Adaptamos la coordenada de búsqueda a la topología elegida
       if (use_log_r) then
          r_horizon_coord = log(r_horizon_phys)
@@ -176,27 +360,55 @@ contains
          r_horizon_coord = r_horizon_phys
       end if
       
-      min_dist = 1000.0d0
-      do i = 1, nx
+      if (r_horizon_coord < x_face(0)) then
+        ! El horizonte está excisado: la primera celda es la sonda exterior.
+        idx_horizon = 0
+        idx_probe = 1
+        print *, 'Event Horizon lies below the inner grid boundary: r_+ = ', &
+                 r_horizon_phys
+      else if (r_horizon_coord > x_face(nx)) then
+        ! No existe una celda causalmente exterior al horizonte en el dominio.
+        idx_horizon = 0
+        idx_probe = 0
+        print *, 'WARNING: Event Horizon lies beyond the outer grid boundary: r_+ = ', &
+                 r_horizon_phys
+      else
+        min_dist = huge(1.0d0)
+        idx_horizon = 1
+        do i = 1, nx
           if (abs(x(i) - r_horizon_coord) < min_dist) then
-              min_dist = abs(x(i) - r_horizon_coord)
-              idx_horizon = i
+            min_dist = abs(x(i) - r_horizon_coord)
+            idx_horizon = i
           end if
-      end do
-      
-      if (x(idx_horizon) < r_horizon_coord) then
-        idx_probe = idx_horizon + 1 
-      else
-        idx_probe = idx_horizon
+        end do
+
+        ! Primera celda cuyo centro se encuentra fuera de r_+.
+        idx_probe = 0
+        do i = 1, nx
+          if (x(i) >= r_horizon_coord) then
+            idx_probe = i
+            exit
+          end if
+        end do
+
+        if (use_log_r) then
+          print *, 'Event Horizon r_+ = ', r_horizon_phys, &
+                   ' mapped nearest to cell ', idx_horizon, &
+                   ' (r = ', exp(x(idx_horizon)), ')'
+          if (idx_probe > 0) print *, 'Accretion Probe mapped to cell ', idx_probe, &
+                                      ' (r = ', exp(x(idx_probe)), ')'
+        else
+          print *, 'Event Horizon r_+ = ', r_horizon_phys, &
+                   ' mapped nearest to cell ', idx_horizon, &
+                   ' (r = ', x(idx_horizon), ')'
+          if (idx_probe > 0) print *, 'Accretion Probe mapped to cell ', idx_probe, &
+                                      ' (r = ', x(idx_probe), ')'
+        end if
       end if
-      
-      ! Imprimimos el valor físico real recuperado (exp(x) o x)
-      if (use_log_r) then
-         print *, "Event Horizon mapped to cell ", idx_horizon, "(r = ", exp(x(idx_horizon)), ")"
-         print *, "Accretion Probe mapped to cell ", idx_probe, "(r = ", exp(x(idx_probe)), ")"
-      else
-         print *, "Event Horizon mapped to cell ", idx_horizon, "(r = ", x(idx_horizon), ")"
-         print *, "Accretion Probe mapped to cell ", idx_probe, "(r = ", x(idx_probe), ")"
+
+      if (do_mdot_extraction .and. idx_probe == 0) then
+        write(*,*) 'CRITICAL ERROR: no grid-cell center lies outside the event horizon.'
+        error stop 1
       end if
     else
       idx_horizon = 0
@@ -423,6 +635,7 @@ contains
     ! RECORDATORIO: Descomentar para producción interactiva
     ! read *, case_id
     case_id = 10
+    call override_integer_from_environment('GRHD_CASE_ID', case_id)
 
     ! 1. CONFIGURACIÓN DEL PROBLEMA (Cada rutina define sus propios parámetros y geometría)
     select case(case_id)
@@ -468,6 +681,9 @@ contains
       stop
     end select
 
+    ! Permite barridos reproducibles sin editar initialization.f90 entre corridas.
+    call apply_runtime_overrides()
+
     ! 2. ASIGNACIÓN DE MÉTRICA
     call set_metric_type()
 
@@ -491,26 +707,6 @@ contains
     call set_initial_conditions()
     call init_wavespeed_solver()
 
-    ! 6. INICIALIZACIÓN DE DIAGNÓSTICOS MULTIMENSAJERO
-    ! Solo se abren los archivos si la gravedad curvo-espacial está activada
-    if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
-        block
-          character(len=150) :: gw_filename, m_dot_filename
-          if (do_gw_extraction) then
-            write(gw_filename, '(A,A,A,A,A)') trim(output_folder), '/', trim(scheme_name), '/', 'GW_signal.dat'
-            open(30, file=gw_filename, status='replace')
-            write(30, '(A)') '# Time            h_plus            h_cross'
-            close(30)
-          end if
-          
-          if (do_mdot_extraction) then
-            write(m_dot_filename, '(A,A,A,A,A)') trim(output_folder), '/', trim(scheme_name), '/', 'm_dot.dat'
-            open(88, file=m_dot_filename, status='replace')
-            write(88, '(A)') '# Time            M_dot'
-            close(88)
-          end if
-        end block
-    end if
   end subroutine initialize_problem
 
   ! ===================================================================================
@@ -729,6 +925,7 @@ contains
     use_shock_sensor = .false.
     ! do_mdot_extraction = .true.
     ! do_gw_extraction = .true.
+    do_ppi_diagnostics = .true.
     use_log_r = .true.
 
     adb_idx = 4.0d0 / 3.0d0
@@ -779,6 +976,7 @@ contains
     use_shock_sensor = .true.
     do_mdot_extraction = .true.
     do_gw_extraction = .true.
+    do_ppi_diagnostics = .true.
     ! use_log_r = .true.
 
     adb_idx = 4.0d0 / 3.0d0

@@ -131,6 +131,23 @@ module variables
 
     logical :: do_mdot_extraction = .false.      ! Extracción de tasa de acreción
     logical :: do_gw_extraction = .false.        ! Extracción de ondas gravitacionales
+    logical :: do_ppi_diagnostics = .false.      ! Modos azimutales y estado global
+
+    ! Control reproducible de perturbaciones para toros de Fishbone--Moncrief.
+    integer, parameter :: PERT_NONE = 0
+    integer, parameter :: PERT_PRESSURE_NOISE = 1
+    integer, parameter :: PERT_DENSITY_NOISE = 2
+    integer, parameter :: PERT_DENSITY_MODE = 3
+    integer, parameter :: PPI_MAX_MODE = 4
+
+    logical :: apply_perturbation = .false.
+    logical :: perturbation_applied = .false.
+    integer :: perturbation_type = PERT_PRESSURE_NOISE
+    integer :: perturbation_seed = 3435
+    integer :: diagnostic_stride = 100
+    real*8 :: perturbation_time = 1000.0d0
+    real*8 :: perturbation_amplitude = 0.01d0
+    real*8 :: perturbation_mode = 1.0d0
 
     ! ==========================================================
     ! LÍMITES NUMÉRICOS (Atmósferas y Tolerancias)
@@ -138,8 +155,13 @@ module variables
     real*8, parameter :: tol_v = 1.0d-5 
     real*8, parameter :: v_max = 1.0d0 - tol_v 
 
-    real*8 :: rho_floor, p_floor 
-    real*8 :: D_floor, tau_floor 
+    real*8 :: rho_floor, p_floor
+    real*8 :: D_floor, tau_floor
+
+    ! Solución suave usada por el caso de convergencia (case_id = 6).
+    ! La densidad es un contacto sinusoidal que se advecta sin deformarse.
+    real*8, parameter :: advected_wave_amplitude = 0.1d0
+    real*8, parameter :: advected_wave_speed = 0.5d0
 
     ! ==========================================================
     ! ARQUITECTURA NUMÉRICA (Reconstrucción)

@@ -25,7 +25,8 @@ D_extraccion_cm = 1000.0 * L_to_cm
 D_observador_cm = 10000.0 * kpc_cm
 
 factor_distancia = D_extraccion_cm / D_observador_cm
-factor_geometrico = 2.0
+# GW_signal.dat ya contiene la proyección face-on para un observador sobre +z.
+factor_geometrico = 1.0
 
 # ====================================================================
 # 2. CARGA DE DATOS
@@ -44,7 +45,14 @@ tiempo_sec = tiempo_sec - tiempo_sec[0]
 
 h_plus_fisico = h_plus_num[mascara] * factor_distancia * factor_geometrico
 
-dt_sec = np.mean(np.diff(tiempo_sec))
+# El intervalo de salida hereda el dt adaptativo. El espectrograma de SciPy
+# requiere una serie uniformemente muestreada.
+if len(tiempo_sec) < 2 or np.any(np.diff(tiempo_sec) <= 0.0):
+    raise ValueError('La serie GW necesita al menos dos tiempos estrictamente crecientes.')
+tiempo_uniforme = np.linspace(tiempo_sec[0], tiempo_sec[-1], len(tiempo_sec))
+h_plus_fisico = np.interp(tiempo_uniforme, tiempo_sec, h_plus_fisico)
+tiempo_sec = tiempo_uniforme
+dt_sec = tiempo_sec[1] - tiempo_sec[0]
 fs_hz = 1.0 / dt_sec
 
 # Limpieza básica

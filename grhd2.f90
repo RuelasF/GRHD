@@ -29,10 +29,10 @@ program grhd2
   integer :: eta_h, eta_m, eta_s  
   integer :: elap_h, elap_m, elap_s  
 
-  real*8 :: total_mass 
-  logical :: apply_perturbation = .false. 
+  real*8 :: total_mass
 
   start_time = omp_get_wtime()
+  call apply_startup_overrides()
 
   ! =========================================================================
   ! 1. ARRANQUE DEL SISTEMA (Cold Start vs Checkpoint Restart)
@@ -45,6 +45,7 @@ program grhd2
     
     open(20, file=trim(restart_file), status='old', form='unformatted')
     call read_checkpoint_metadata(20)
+    call apply_control_overrides()
 
     ! Recalculamos parámetros termodinámicos auxiliares
     g1 = adb_idx / (adb_idx - 1.0d0)
@@ -60,12 +61,6 @@ program grhd2
     call read_checkpoint_state(20, n_steps, integration_time)
     close(20)
     
-    ! final_time = 1000.0d0 ! Activar si deseas extender el tiempo final al reanudar
-    
-    ! Si reanudamos después de T=1000, desactivamos el gatillo para
-    ! no volver a inyectar perturbaciones.
-    if (integration_time >= 1000.0d0) apply_perturbation = .false.
-
     ! Sincronizamos y recuperamos primitivas para el integrador RK3
     u = up
 
@@ -99,8 +94,14 @@ program grhd2
     !$OMP END PARALLEL DO
 
     call save_vtk_at_time(integration_time)
-    if (do_gw_extraction) call calc_gw_strain(integration_time)
-    if (do_mdot_extraction) call calc_m_dot(integration_time)
+  end if
+
+  call initialize_auxiliary_output(.not. do_restart)
+  if (do_gw_extraction) call calc_gw_strain(integration_time)
+  if (do_mdot_extraction) call calc_m_dot(integration_time)
+  if (do_ppi_diagnostics) then
+    call calc_ppi_modes(integration_time)
+    call calc_global_diagnostics(integration_time)
   end if
 
   ! -------------------------------------------
@@ -136,32 +137,47 @@ program grhd2
       dt = final_time - integration_time
     end if
 
-    ! --- INYECCIÓN RETRASADA DE PERTURBACIÓN ---
-    if (integration_time >= 1000.0d0 .and. apply_perturbation) then
+    ! --- INYECCIÓN RETRASADA, CONFIGURABLE Y REPRODUCIBLE ---
+    if (apply_perturbation .and. .not. perturbation_applied .and. &
+        integration_time >= perturbation_time) then
       print *, ""
       print *, "=========================================================="
-      print *, ">>> TIEMPO T=1000 ALCANZADO."
-      print *, ">>> Inyectando superposición de modos (m=4) + Ruido Blanco"
+      print *, ">>> TIEMPO DE PERTURBACION ALCANZADO: ", integration_time
       print *, "=========================================================="
-      
-      call save_vtk_at_time(integration_time) ! Guardar estado inmaculado justo antes
-      ! call inject_density_mode(p, 2.0d0)      ! Inyectar modo
-      call inject_pressure_noise(p)
-      ! call inject_density_noise(p)
 
-      ! Re-sincronizamos U y UP tras modificar P para evitar inestabilidades numéricas
-      !$OMP PARALLEL DO PRIVATE(i, j, k)
-      do k = 1, nz
-        do j = 1, ny
-          do i = 1, nx
-            call prim_to_cons(p(:,i,j,k), u(:,i,j,k), i, j, k)
-            up(:,i,j,k) = u(:,i,j,k) 
+      select case(perturbation_type)
+      case(PERT_PRESSURE_NOISE)
+        call inject_pressure_noise(p, perturbation_amplitude, perturbation_seed)
+      case(PERT_DENSITY_NOISE)
+        call inject_density_noise(p, perturbation_amplitude, perturbation_seed)
+      case(PERT_DENSITY_MODE)
+        call inject_density_mode(p, perturbation_mode, perturbation_amplitude)
+      case default
+        write(*,*) 'Perturbation disabled: type = PERT_NONE.'
+        apply_perturbation = .false.
+      end select
+
+      if (perturbation_type /= PERT_NONE) then
+        ! Re-sincronizamos U y UP tras modificar P.
+        !$OMP PARALLEL DO PRIVATE(i, j, k)
+        do k = 1, nz
+          do j = 1, ny
+            do i = 1, nx
+              call prim_to_cons(p(:,i,j,k), u(:,i,j,k), i, j, k)
+              up(:,i,j,k) = u(:,i,j,k)
+            end do
           end do
         end do
-      end do
-      !$OMP END PARALLEL DO
-      
-      apply_perturbation = .false. ! Desarmamos el gatillo
+        !$OMP END PARALLEL DO
+        call set_boundary_conditions(p)
+
+        perturbation_applied = .true.
+        call write_perturbation_event(integration_time)
+        if (do_ppi_diagnostics) then
+          call calc_ppi_modes(integration_time)
+          call calc_global_diagnostics(integration_time)
+        end if
+      end if
     end if
 
     n_steps = n_steps + 1
@@ -211,6 +227,10 @@ program grhd2
         if (do_gw_extraction) call calc_gw_strain(integration_time)
         if (do_mdot_extraction) call calc_m_dot(integration_time)
       end if
+    end if
+    if (do_ppi_diagnostics .and. mod(n_steps, diagnostic_stride) == 0) then
+      call calc_ppi_modes(integration_time)
+      call calc_global_diagnostics(integration_time)
     end if
 
     ! --- CONSERVACIÓN DE MASA GLOBAL ---

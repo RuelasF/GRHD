@@ -291,7 +291,6 @@ contains
     real*8  :: s_min_L, s_max_L, s_min_R, s_max_R
     real*8  :: p_jump, p_min, p_max
     real*8  :: rho_jump, rho_min, rho_max
-    logical :: shock_sensor
     real*8, parameter :: atm_factor = 1.0d2 ! 100 veces el piso se considera atmósfera
 
     ! =====================================================================
@@ -330,10 +329,37 @@ contains
     case(REC_TVD)
 
     if (use_shock_sensor) then
-      !$OMP PARALLEL DO PRIVATE(k,i,s_min_L,s_max_L,s_min_R,s_max_R)
-        do k = 1, neq
-          do i = 0, nodes
-            if (prim_1d(eq_de, i) <= atm_factor * rho_floor .or. prim_1d(eq_de, i+1) <= atm_factor * rho_floor) then
+      !$OMP PARALLEL DO PRIVATE(k, i, s_min_L, s_max_L, s_min_R, s_max_R, p_max, p_min, p_jump, rho_max, rho_min, rho_jump)
+        do i = 0, nodes
+          p_max = max(prim_1d(eq_pr, i-2), prim_1d(eq_pr, i-1), prim_1d(eq_pr, i), &
+                      prim_1d(eq_pr, i+1), prim_1d(eq_pr, i+2))
+          p_min = min(prim_1d(eq_pr, i-2), prim_1d(eq_pr, i-1), prim_1d(eq_pr, i), &
+                      prim_1d(eq_pr, i+1), prim_1d(eq_pr, i+2))
+          rho_max = max(prim_1d(eq_de, i-2), prim_1d(eq_de, i-1), prim_1d(eq_de, i), &
+                        prim_1d(eq_de, i+1), prim_1d(eq_de, i+2))
+          rho_min = min(prim_1d(eq_de, i-2), prim_1d(eq_de, i-1), prim_1d(eq_de, i), &
+                        prim_1d(eq_de, i+1), prim_1d(eq_de, i+2))
+
+          if (p_max > 1.0d3 * p_floor) then
+            p_jump = (p_max - p_min) / max(p_min, p_floor)
+          else
+            p_jump = 0.0d0
+          end if
+
+          if (rho_max > 1.0d3 * rho_floor) then
+            rho_jump = (rho_max - rho_min) / max(rho_min, rho_floor)
+          else
+            rho_jump = 0.0d0
+          end if
+
+          do k = 1, neq
+            if (trim(metric_type) /= 'Minkowski' .and. sweep_dir == DIR_X .and. i <= 0) then
+              q_L(k, i) = prim_1d(k, i)
+              q_R(k, i) = prim_1d(k, i+1)
+            else if (prim_1d(eq_de, i) <= atm_factor * rho_floor .or. prim_1d(eq_de, i+1) <= atm_factor * rho_floor) then
+              q_L(k, i) = prim_1d(k, i)
+              q_R(k, i) = prim_1d(k, i+1)
+            else if (p_jump >= p_tol_godunov .or. rho_jump >= rho_tol_godunov) then
               q_L(k, i) = prim_1d(k, i)
               q_R(k, i) = prim_1d(k, i+1)
             else
@@ -368,28 +394,45 @@ contains
     case(REC_WENO3) 
 
     if (use_shock_sensor) then
-      !$OMP PARALLEL DO PRIVATE(k, i, s_min_L, s_max_L, s_min_R, s_max_R, shock_sensor, p_jump, rho_jump)
+      !$OMP PARALLEL DO PRIVATE(k, i, s_min_L, s_max_L, s_min_R, s_max_R, p_max, p_min, p_jump, rho_max, rho_min, rho_jump)
         do i = 0, nodes
-          
-          p_jump = abs(prim_1d(eq_pr, i+1) - prim_1d(eq_pr, i-1)) / &
-                  max(min(prim_1d(eq_pr, i+1), prim_1d(eq_pr, i-1)), p_floor)
 
-          rho_jump = abs(prim_1d(eq_de, i+1) - prim_1d(eq_de, i-1)) / &
-                    max(min(prim_1d(eq_de, i+1), prim_1d(eq_de, i-1)), rho_floor)
+          p_max = max(prim_1d(eq_pr, i-2), prim_1d(eq_pr, i-1), prim_1d(eq_pr, i), &
+                      prim_1d(eq_pr, i+1), prim_1d(eq_pr, i+2))
+          p_min = min(prim_1d(eq_pr, i-2), prim_1d(eq_pr, i-1), prim_1d(eq_pr, i), &
+                      prim_1d(eq_pr, i+1), prim_1d(eq_pr, i+2))
+          rho_max = max(prim_1d(eq_de, i-2), prim_1d(eq_de, i-1), prim_1d(eq_de, i), &
+                        prim_1d(eq_de, i+1), prim_1d(eq_de, i+2))
+          rho_min = min(prim_1d(eq_de, i-2), prim_1d(eq_de, i-1), prim_1d(eq_de, i), &
+                        prim_1d(eq_de, i+1), prim_1d(eq_de, i+2))
 
-          if (p_jump > p_tol_tvd .or. rho_jump > rho_tol_tvd) then
-              shock_sensor = .true.
+          if (p_max > 1.0d3 * p_floor) then
+            p_jump = (p_max - p_min) / max(p_min, p_floor)
           else
-              shock_sensor = .false.
+            p_jump = 0.0d0
+          end if
+
+          if (rho_max > 1.0d3 * rho_floor) then
+            rho_jump = (rho_max - rho_min) / max(rho_min, rho_floor)
+          else
+            rho_jump = 0.0d0
           end if
 
           do k = 1, neq
-            
-            if (prim_1d(eq_de, i) <= atm_factor * rho_floor .or. prim_1d(eq_de, i+1) <= atm_factor * rho_floor) then
+
+            if (trim(metric_type) /= 'Minkowski' .and. sweep_dir == DIR_X .and. i <= 0) then
               q_L(k, i) = prim_1d(k, i)
               q_R(k, i) = prim_1d(k, i+1)
 
-            else if (shock_sensor) then
+            else if (prim_1d(eq_de, i) <= atm_factor * rho_floor .or. prim_1d(eq_de, i+1) <= atm_factor * rho_floor) then
+              q_L(k, i) = prim_1d(k, i)
+              q_R(k, i) = prim_1d(k, i+1)
+
+            else if (p_jump >= p_tol_godunov .or. rho_jump >= rho_tol_godunov) then
+              q_L(k, i) = prim_1d(k, i)
+              q_R(k, i) = prim_1d(k, i+1)
+
+            else if (p_jump >= p_tol_tvd .or. rho_jump >= rho_tol_tvd) then
               s_min_L = prim_1d(k, i) - prim_1d(k, i-1)
               s_max_L = prim_1d(k, i+1) - prim_1d(k, i)
               q_L(k, i) = prim_1d(k, i) + 0.5d0 * tvd_slope(s_min_L, s_max_L, LIM_MC)
@@ -461,6 +504,10 @@ contains
               q_R(k, i) = prim_1d(k, i+1)
 
             else if (prim_1d(eq_de, i) <= atm_factor * rho_floor .or. prim_1d(eq_de, i+1) <= atm_factor * rho_floor) then
+              q_L(k, i) = prim_1d(k, i)
+              q_R(k, i) = prim_1d(k, i+1)
+
+            else if (p_jump >= p_tol_godunov .or. rho_jump >= rho_tol_godunov) then
               q_L(k, i) = prim_1d(k, i)
               q_R(k, i) = prim_1d(k, i+1)
 

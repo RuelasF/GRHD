@@ -9,6 +9,11 @@ FFLAGS = -O3 -fopenmp -march=native -flto=auto -fno-math-errno -fno-trapping-mat
 
 # Nombre del ejecutable final
 TARGET = grhd2
+TEST_HLLC_TARGET = tests/test_hllc_fluxes
+TEST_GW_GEOMETRY_TARGET = tests/test_gw_geometry
+TEST_GW_STRESS_TARGET = tests/test_gw_stress
+
+.PHONY: test-hllc test-gw test-gw-geometry test-gw-stress clean
 
 # Lista de archivos objeto en el orden estricto de dependencias
 OBJS = variables.o \
@@ -25,6 +30,20 @@ OBJS = variables.o \
 # Regla principal para construir el ejecutable
 $(TARGET): $(OBJS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJS)
+
+test-hllc: variables.o metrics.o equations.o fluxes.o tests/test_hllc_fluxes.f90
+	$(FC) $(FFLAGS) -o $(TEST_HLLC_TARGET) tests/test_hllc_fluxes.f90 variables.o metrics.o equations.o fluxes.o
+	./$(TEST_HLLC_TARGET)
+
+test-gw-geometry: variables.o metrics.o tests/test_gw_geometry.f90
+	$(FC) $(FFLAGS) -o $(TEST_GW_GEOMETRY_TARGET) tests/test_gw_geometry.f90 variables.o metrics.o
+	./$(TEST_GW_GEOMETRY_TARGET)
+
+test-gw-stress: variables.o metrics.o conditions.o output.o tests/test_gw_stress.f90
+	$(FC) $(FFLAGS) -o $(TEST_GW_STRESS_TARGET) tests/test_gw_stress.f90 variables.o metrics.o conditions.o output.o
+	./$(TEST_GW_STRESS_TARGET)
+
+test-gw: test-gw-geometry test-gw-stress
 
 # Regla genérica para compilar archivos .f90 a objetos .o
 %.o: %.f90
@@ -44,4 +63,4 @@ grhd2.o: variables.o metrics.o initialization.o conditions.o equations.o fluxes.
 
 # Limpiar archivos compilados (comando: make clean)
 clean:
-	rm -f *.o *.mod $(TARGET)
+	rm -f *.o *.mod $(TARGET) $(TEST_HLLC_TARGET) $(TEST_GW_GEOMETRY_TARGET) $(TEST_GW_STRESS_TARGET)

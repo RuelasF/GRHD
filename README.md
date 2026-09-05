@@ -28,6 +28,13 @@ make -j
 ./grhd2
 ```
 
+Run the available regression tests with:
+
+```bash
+make test-hllc
+make test-gw
+```
+
 The numerical architecture and test case are currently set in
 `initialization.f90`. Output is written to
 `FM_KS_a0.9d0_data/weno5_hlle/` for the default torus configuration.
@@ -55,8 +62,16 @@ small reference data, and documentation under version control.
 
 ## Validation status
 
-Kerr-Schild Fishbone-Moncrief runs for (a=0), (0.2), and (0.5) completed
-to (t=1000) on the cluster without reported runtime errors. Before treating
-the (a=0.9) configuration as validated, compare the equilibrium profile,
-four-velocity normalization, and the (a=0) Eddington-Finkelstein/Kerr-Schild
-limit.
+The smooth-wave campaign recovers the expected convergence order for Godunov,
+TVD-MC, WENO3, MP5, and WENO5 with HLLC. The HLLC and Finn--Evans geometry and
+stress regression tests pass on Zotz.
+
+The principal PPI campaign completed 18 equatorial runs to (t=3000) with
+Eddington--Finkelstein/Kerr--Schild backgrounds, six metric/spin configurations, and
+WENO3/WENO5/MP5 with HLLE. These are research results in a one-polar-cell
+2.5D model; they do not constitute a validated three-dimensional or
+self-gravitating calculation. The current gravitational-wave output is a
+Finn--Evans weak-field proxy, not a gauge-invariant physical strain.
+
+See `CONTEXTO_GRHD_PARA_PRISM.md` for the complete technical and scientific
+status, evidence, limitations, campaign locations, and proposed thesis scope.

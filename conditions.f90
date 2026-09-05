@@ -124,10 +124,11 @@ contains
       print *, '-> Test de Convergencia inicializado'
 
       do i = 1, nx
-        p(eq_de, i, :, :) = 1.0d0 + 0.1d0 * sinc_factor * sin(2.0d0 * pi * x(i))
+        p(eq_de, i, :, :) = 1.0d0 + advected_wave_amplitude * sinc_factor * &
+                            sin(2.0d0 * pi * x(i))
       end do
-      
-      p(eq_vx, :, :, :) = 0.5d0
+
+      p(eq_vx, :, :, :) = advected_wave_speed
       p(eq_pr, :, :, :) = 1.0d0
 
     case('MichelA', '7') ! Acreción de Michel (Caída esférica de gas en un Agujero Negro)
@@ -460,33 +461,53 @@ contains
 
   end subroutine setup_fishbone_moncrief_initial
 
-  ! Subrutina: inject_pressure_noise
-  ! Rompe la simetría perfecta para detonar inestabilidades multidimensionales.
-  subroutine inject_pressure_noise(prim_state)
+  ! Inicializa de manera portable y reproducible el generador intrínseco.
+  subroutine set_reproducible_random_seed(seed_value)
     implicit none
-    ! Cambiamos a la dimensionalidad 4D estándar
-    real*8, intent(inout) :: prim_state(:,:,:,:)
+    integer, intent(in) :: seed_value
+    integer :: seed_size, idx
+    integer, allocatable :: seed_values(:)
+
+    call random_seed(size=seed_size)
+    allocate(seed_values(seed_size))
+    do idx = 1, seed_size
+      seed_values(idx) = modulo(seed_value + 104729 * (idx - 1), huge(1) - 1)
+      if (seed_values(idx) <= 0) seed_values(idx) = idx
+    end do
+    call random_seed(put=seed_values)
+    deallocate(seed_values)
+  end subroutine set_reproducible_random_seed
+
+  ! Ruido blanco multiplicativo en presión. Es la perturbación PPI predeterminada
+  ! porque excita simultáneamente varios modos sin imponer uno dominante.
+  subroutine inject_pressure_noise(prim_state, amplitude, seed_value)
+    implicit none
+    real*8, intent(inout) :: prim_state(neq, -nghost:nx+nghost, &
+                                        -nghost:ny+nghost, -nghost:nz+nghost)
+    real*8, intent(in) :: amplitude
+    integer, intent(in) :: seed_value
     integer :: i, j, k
-    integer :: local_nx, local_ny, local_nz
     real*8  :: rand_val, rho_max_local, factor
 
-    local_nx = size(prim_state, 2)
-    local_ny = size(prim_state, 3)
-    local_nz = size(prim_state, 4)
+    if (amplitude < 0.0d0 .or. amplitude >= 1.0d0) then
+      write(*,*) 'Invalid pressure-noise amplitude; require 0 <= A < 1.'
+      error stop 1
+    end if
 
-    print *, ">>> ATENCION: Inyectando 4% de ruido aleatorio en la presion..."
+    print *, ">>> Inyectando ruido blanco en presion. A =", amplitude, &
+             " semilla =", seed_value
 
-    rho_max_local = maxval(prim_state(eq_de, :, :, :))
-    call random_seed()
+    rho_max_local = maxval(prim_state(eq_de, 1:nx, 1:ny, 1:nz))
+    call set_reproducible_random_seed(seed_value)
 
-    do k = 1, local_nz
-      do j = 1, local_ny
-        do i = 1, local_nx
+    do k = 1, nz
+      do j = 1, ny
+        do i = 1, nx
           ! Solo perturbar el cuerpo del disco
           if (prim_state(eq_de, i, j, k) > 0.05d0 * rho_max_local) then
             call random_number(rand_val) 
             rand_val = 2.0d0 * rand_val - 1.0d0 ! Entre -1 y 1
-            factor = 1.0d0 + 0.04d0 * rand_val
+            factor = 1.0d0 + amplitude * rand_val
             prim_state(eq_pr, i, j, k) = prim_state(eq_pr, i, j, k) * factor
           end if
         end do
@@ -543,43 +564,34 @@ contains
   !   end do
   ! end subroutine inject_density_mode
 
-  subroutine inject_density_mode(prim_state, mode_m)
+  subroutine inject_density_mode(prim_state, mode_m, amplitude)
     implicit none
-    real*8, intent(inout) :: prim_state(:,:,:,:)
+    real*8, intent(inout) :: prim_state(neq, -nghost:nx+nghost, &
+                                        -nghost:ny+nghost, -nghost:nz+nghost)
     real*8, intent(in)    :: mode_m
+    real*8, intent(in)    :: amplitude
     integer :: i, j, k
-    integer :: local_nx, local_ny, local_nz
-    real*8  :: phi_loc, rho_max_local, envelope, factor, rand_val
+    real*8  :: phi_loc, rho_max_local, envelope, factor
 
-    local_nx = size(prim_state, 2)
-    local_ny = size(prim_state, 3)
-    local_nz = size(prim_state, 4)
+    if (amplitude < 0.0d0 .or. amplitude >= 1.0d0 .or. mode_m < 1.0d0) then
+      write(*,*) 'Invalid coherent density mode; require 0 <= A < 1 and m >= 1.'
+      error stop 1
+    end if
 
-    print *, ">>> ATENCION: Inyectando modo m =", mode_m, " + Ruido Blanco Isentrópico..."
-    
-    rho_max_local = maxval(prim_state(eq_de, :, :, :))
+    print *, ">>> Inyectando modo isentropico puro m =", mode_m, " A =", amplitude
 
-    ! Inicializar la semilla aleatoria para que el ruido cambie
-    call random_seed()
+    rho_max_local = maxval(prim_state(eq_de, 1:nx, 1:ny, 1:nz))
 
-    do k = 1, local_nz
-      ! Nota: Asegúrate de que z(k) o y(j) corresponda a tu coordenada azimutal phi
-      phi_loc = z(k) 
-      
-      do j = 1, local_ny
-        do i = 1, local_nx
+    do k = 1, nz
+      phi_loc = z(k)
+
+      do j = 1, ny
+        do i = 1, nx
 
           ! Blindaje del vacío: Solo perturbamos el corazón del toroide (> 5% de la densidad máxima)
           if (prim_state(eq_de, i, j, k) > 0.05d0 * rho_max_local) then
             
-            ! 1. Generar ruido aleatorio (rand_val estará entre 0.0 y 1.0)
-            call random_number(rand_val)
-            
-            ! Escalar el ruido para que oscile entre -1.0 y 1.0
-            rand_val = 2.0d0 * rand_val - 1.0d0
-            
-            ! 2. Súper-posición: 1% de semilla coherente (m=2, m=3) + 4% de ruido blanco aleatorio
-            envelope = 0.01d0 * cos(mode_m * phi_loc) + 0.04d0 * rand_val
+            envelope = amplitude * cos(mode_m * phi_loc)
             
             factor = 1.0d0 + envelope
             
@@ -595,32 +607,36 @@ contains
     end do
   end subroutine inject_density_mode
 
-  subroutine inject_density_noise(prim_state)
+  subroutine inject_density_noise(prim_state, amplitude, seed_value)
     implicit none
-    real*8, intent(inout) :: prim_state(:,:,:,:)
+    real*8, intent(inout) :: prim_state(neq, -nghost:nx+nghost, &
+                                        -nghost:ny+nghost, -nghost:nz+nghost)
+    real*8, intent(in) :: amplitude
+    integer, intent(in) :: seed_value
     integer :: i, j, k
-    integer :: local_nx, local_ny, local_nz
     real*8  :: rho_max_local, factor, rand_val
 
-    local_nx = size(prim_state, 2)
-    local_ny = size(prim_state, 3)
-    local_nz = size(prim_state, 4)
+    if (amplitude < 0.0d0 .or. amplitude >= 1.0d0) then
+      write(*,*) 'Invalid density-noise amplitude; require 0 <= A < 1.'
+      error stop 1
+    end if
 
-    print *, ">>> ATENCION: Inyectando 4% de Ruido Blanco Isentrópico en T=0..."
-    
-    rho_max_local = maxval(prim_state(eq_de, :, :, :))
-    call random_seed()
+    print *, ">>> Inyectando ruido blanco isentropico. A =", amplitude, &
+             " semilla =", seed_value
 
-    do k = 1, local_nz
-      do j = 1, local_ny
-        do i = 1, local_nx
+    rho_max_local = maxval(prim_state(eq_de, 1:nx, 1:ny, 1:nz))
+    call set_reproducible_random_seed(seed_value)
+
+    do k = 1, nz
+      do j = 1, ny
+        do i = 1, nx
           ! Solo perturbar el cuerpo del disco
           if (prim_state(eq_de, i, j, k) > 0.05d0 * rho_max_local) then
             
             call random_number(rand_val)
             rand_val = 2.0d0 * rand_val - 1.0d0 ! Entre -1 y 1
             
-            factor = 1.0d0 + 0.04d0 * rand_val
+            factor = 1.0d0 + amplitude * rand_val
             
             prim_state(eq_de, i, j, k) = prim_state(eq_de, i, j, k) * factor
             prim_state(eq_pr, i, j, k) = prim_state(eq_pr, i, j, k) * (factor**adb_idx)
