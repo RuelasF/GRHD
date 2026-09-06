@@ -13,6 +13,8 @@ tests/test_gw_stress
 *.rst
 *.log
 *.bak
+*.sh
+*.md
 
 # --- Historial y salidas locales ---
 .history/
