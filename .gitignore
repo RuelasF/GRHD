@@ -17,7 +17,24 @@ tests/test_multidimensional_cfl
 *.log
 *.bak
 *.sh
+*.py
 *.md
+!docs/MANUAL_GRHD.md
+
+# --- Documentación local no publicada ---
+docs/*
+!docs/MANUAL_GRHD.md
+
+# --- Configuraciones locales de ejecución ---
+par/
+
+# --- Artefactos locales de LaTeX ---
+docs/teoria/*.aux
+docs/teoria/*.bbl
+docs/teoria/*.blg
+docs/teoria/*.out
+docs/teoria/*.toc
+docs/teoria/*.pdf
 
 # --- Historial y salidas locales ---
 .history/
