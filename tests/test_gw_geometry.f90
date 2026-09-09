@@ -1,17 +1,18 @@
 program test_gw_geometry
-  use metrics, only: event_horizon_radius, eulerian_to_coordinate_rates, &
-                     ks_spherical_to_cartesian
+  use metrics, only: event_horizon_radius
+  use output, only: gw_cartesian_kinematics, kerr_schild_spheroidal_position
   implicit none
 
   integer :: failures
   real*8 :: r, theta, phi, spin, alpha, eps_fd
-  real*8 :: beta(3), eulerian_velocity(3), rates(3), expected_rates(3)
-  real*8 :: position(3), velocity(3), jacobian
-  real*8 :: position_plus(3), position_minus(3), velocity_dummy(3)
-  real*8 :: rates_zero(3), jacobian_dummy, finite_difference_velocity(3)
+  real*8 :: beta(3), beta_log(3), eulerian_velocity(3), eulerian_velocity_log(3)
+  real*8 :: rates(3), zero_velocity(3)
+  real*8 :: position(3), position_log(3), velocity(3), velocity_log(3), jacobian
+  real*8 :: position_plus(3), position_minus(3), velocity_dummy(3), mapped_position(3)
+  real*8 :: jacobian_dummy, finite_difference_velocity(3)
 
   failures = 0
-  rates_zero = 0.0d0
+  zero_velocity = 0.0d0
 
   call check_close('Schwarzschild horizon', event_horizon_radius(1.0d0, 0.0d0), &
                    2.0d0, 1.0d-14, failures)
@@ -21,20 +22,30 @@ program test_gw_geometry
                    1.0d0, 1.0d-14, failures)
 
   r = 7.0d0
+  theta = 1.1d0
+  phi = 0.7d0
+  spin = 0.8d0
   alpha = 0.8d0
   beta = [0.04d0, -0.02d0, 0.01d0]
   eulerian_velocity = beta / alpha
-  call eulerian_to_coordinate_rates(r, alpha, beta, eulerian_velocity, &
-                                     .false., rates)
-  call check_vector('stationary physical-grid transport velocity', rates, &
+  call gw_cartesian_kinematics(r, theta, phi, spin, alpha, beta, &
+                               eulerian_velocity, .false., position, velocity, jacobian)
+  call check_vector('stationary physical-grid transport velocity', velocity, &
                     [0.0d0, 0.0d0, 0.0d0], 1.0d-14, failures)
 
   eulerian_velocity = [0.03d0, -0.04d0, 0.05d0]
-  call eulerian_to_coordinate_rates(r, alpha, beta, eulerian_velocity, &
-                                     .true., rates)
-  expected_rates = alpha * eulerian_velocity - beta
-  expected_rates(1) = r * expected_rates(1)
-  call check_vector('log-grid transport velocity', rates, expected_rates, &
+  call gw_cartesian_kinematics(r, theta, phi, spin, alpha, beta, &
+                               eulerian_velocity, .false., position, velocity, jacobian)
+  beta_log = beta
+  beta_log(1) = beta(1) / r
+  eulerian_velocity_log = eulerian_velocity
+  eulerian_velocity_log(1) = eulerian_velocity(1) / r
+  call gw_cartesian_kinematics(r, theta, phi, spin, alpha, beta_log, &
+                               eulerian_velocity_log, .true., position_log, &
+                               velocity_log, jacobian_dummy)
+  call check_vector('log-grid Cartesian position', position_log, position, &
+                    1.0d-14, failures)
+  call check_vector('log-grid transport velocity', velocity_log, velocity, &
                     1.0d-14, failures)
 
   r = 4.3d0
@@ -42,32 +53,46 @@ program test_gw_geometry
   phi = 0.7d0
   spin = 0.8d0
   rates = [0.12d0, -0.03d0, 0.21d0]
-  call ks_spherical_to_cartesian(r, theta, phi, spin, rates, position, &
-                                 velocity, jacobian)
+  alpha = 1.0d0
+  beta = 0.0d0
+  call gw_cartesian_kinematics(r, theta, phi, spin, alpha, beta, rates, &
+                               .false., position, velocity, jacobian)
+  call kerr_schild_spheroidal_position(r, theta, phi, spin, mapped_position)
+  call check_vector('VTK/GW spheroidal position consistency', mapped_position, &
+                    position, 1.0d-14, failures)
   call check_close('KS flat Jacobian', jacobian, &
                    (r**2 + spin**2 * cos(theta)**2) * sin(theta), &
                    1.0d-13, failures)
 
   eps_fd = 1.0d-6
-  call ks_spherical_to_cartesian(r + eps_fd * rates(1), &
-                                 theta + eps_fd * rates(2), &
-                                 phi + eps_fd * rates(3), spin, rates_zero, &
-                                 position_plus, velocity_dummy, jacobian_dummy)
-  call ks_spherical_to_cartesian(r - eps_fd * rates(1), &
-                                 theta - eps_fd * rates(2), &
-                                 phi - eps_fd * rates(3), spin, rates_zero, &
-                                 position_minus, velocity_dummy, jacobian_dummy)
+  call gw_cartesian_kinematics(r + eps_fd * rates(1), &
+                               theta + eps_fd * rates(2), &
+                               phi + eps_fd * rates(3), spin, alpha, beta, &
+                               zero_velocity, .false., position_plus, &
+                               velocity_dummy, jacobian_dummy)
+  call gw_cartesian_kinematics(r - eps_fd * rates(1), &
+                               theta - eps_fd * rates(2), &
+                               phi - eps_fd * rates(3), spin, alpha, beta, &
+                               zero_velocity, .false., position_minus, &
+                               velocity_dummy, jacobian_dummy)
   finite_difference_velocity = (position_plus - position_minus) / (2.0d0 * eps_fd)
   call check_vector('KS Cartesian velocity chain rule', velocity, &
                     finite_difference_velocity, 2.0d-9, failures)
 
-  call ks_spherical_to_cartesian(r, theta, phi, 0.0d0, rates_zero, position, &
-                                 velocity_dummy, jacobian)
+  call gw_cartesian_kinematics(r, theta, phi, 0.0d0, alpha, beta, zero_velocity, &
+                               .false., position, velocity_dummy, jacobian)
   call check_vector('a=0 spherical Cartesian position', position, &
                     [r*sin(theta)*cos(phi), r*sin(theta)*sin(phi), r*cos(theta)], &
                     1.0d-13, failures)
   call check_close('a=0 spherical Jacobian', jacobian, r**2*sin(theta), &
                    1.0d-13, failures)
+
+  call kerr_schild_spheroidal_position(r, 0.0d0, phi, spin, mapped_position)
+  call check_vector('exact north-pole collapse', mapped_position, &
+                    [0.0d0, 0.0d0, r], 0.0d0, failures)
+  call kerr_schild_spheroidal_position(r, acos(-1.0d0), phi, spin, mapped_position)
+  call check_vector('exact south-pole collapse', mapped_position, &
+                    [0.0d0, 0.0d0, -r], 0.0d0, failures)
 
   if (failures /= 0) then
     write(*,*) 'GW geometry tests FAILED: ', failures

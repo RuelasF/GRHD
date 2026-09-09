@@ -158,10 +158,62 @@ module variables
     real*8 :: rho_floor, p_floor
     real*8 :: D_floor, tau_floor
 
-    ! Solución suave usada por el caso de convergencia (case_id = 6).
-    ! La densidad es un contacto sinusoidal que se advecta sin deformarse.
-    real*8, parameter :: advected_wave_amplitude = 0.1d0
-    real*8, parameter :: advected_wave_speed = 0.5d0
+    ! ==========================================================
+    ! PARÁMETROS DE LAS CONDICIONES INICIALES
+    ! ==========================================================
+    ! Tubos de choque.
+    real*8 :: sod_interface = 0.5d0
+    real*8 :: sod_rho_left = 1.0d0, sod_rho_right = 0.125d0
+    real*8 :: sod_pressure_left = 1.0d0, sod_pressure_right = 0.1d0
+
+    real*8 :: strong_interface = 0.5d0
+    real*8 :: strong_rho_left = 1.0d0, strong_rho_right = 1.0d0
+    real*8 :: strong_pressure_left = 1000.0d0, strong_pressure_right = 0.01d0
+
+    real*8 :: shu_interface = 0.5d0
+    real*8 :: shu_rho_left = 5.0d0, shu_pressure_left = 50.0d0
+    real*8 :: shu_rho_right = 2.0d0, shu_rho_amplitude = 0.3d0
+    real*8 :: shu_wave_number = 50.0d0, shu_pressure_right = 5.0d0
+
+    ! Kelvin--Helmholtz.
+    real*8 :: khi_half_width = 0.25d0
+    real*8 :: khi_rho_inner = 2.0d0, khi_rho_outer = 1.0d0
+    real*8 :: khi_vx_inner = 0.5d0, khi_vx_outer = -0.5d0
+    real*8 :: khi_pressure = 2.5d0
+    real*8 :: khi_perturbation_amplitude = 0.01d0
+    real*8 :: khi_perturbation_wave_number = 10.0d0
+
+    ! Jet axisimétrico.
+    real*8 :: jet_ambient_density = 10.0d0
+    real*8 :: jet_ambient_pressure = 0.01d0
+    real*8 :: jet_ambient_velocity = 0.0d0
+    real*8 :: jet_nozzle_radius = 1.0d0, jet_nozzle_length = 1.0d0
+    real*8 :: jet_density = 0.1d0, jet_pressure = 0.01d0
+    real*8 :: jet_velocity = 0.99d0
+
+    ! Onda suave para convergencia. wave_number está en múltiplos de pi.
+    real*8 :: advected_wave_density = 1.0d0
+    real*8 :: advected_wave_amplitude = 0.1d0
+    real*8 :: advected_wave_speed = 0.5d0
+    real*8 :: advected_wave_pressure = 1.0d0
+    real*8 :: advected_wave_number = 2.0d0
+
+    ! Acreción y explosión fuera del eje.
+    real*8 :: michel_critical_radius = 100.0d0
+    real*8 :: michel_critical_density = 0.1d0
+    real*8 :: dust_accretion_constant = -0.5d0
+    real*8 :: offaxis_radial_center = 15.0d0
+    real*8 :: offaxis_phi_center = acos(-1.0d0)
+    real*8 :: offaxis_width = 1.5d0
+    real*8 :: offaxis_background_density = 0.1d0
+    real*8 :: offaxis_background_pressure = 0.1d0
+    real*8 :: offaxis_density_amplitude = 1.0d0
+    real*8 :: offaxis_pressure_amplitude = 1.0d0
+
+    ! Fishbone--Moncrief: radios expresados en unidades de la masa M.
+    real*8 :: fm_inner_radius = 6.25d0
+    real*8 :: fm_pressure_max_radius = 9.25d0
+    real*8 :: fm_polytropic_constant = 0.0015d0
 
     ! ==========================================================
     ! ARQUITECTURA NUMÉRICA (Reconstrucción)
@@ -175,14 +227,14 @@ module variables
     integer, parameter :: RS_HLLE = 1
     integer, parameter :: RS_HLLC = 2
     integer, parameter :: RS_HLLD = 3
-    integer :: riemann_solver_id 
+    integer :: riemann_solver_id = RS_HLLE
 
     integer, parameter :: LIM_MINMOD   = 1
     integer, parameter :: LIM_SUPERBEE = 2
     integer, parameter :: LIM_MC       = 3
 
-    integer :: rec_method_id 
-    integer :: tvd_limiter_id 
+    integer :: rec_method_id = REC_WENO5
+    integer :: tvd_limiter_id = LIM_MC
     character(len=20) :: scheme_name 
     character(len=10) :: solver_name 
     integer :: nghost 
@@ -194,6 +246,12 @@ module variables
     character(len=50) :: case_name 
     character(len=50) :: output_folder 
     character(len=50) :: output_prefix 
+
+    ! El estado siempre se calcula en las coordenadas de la metrica. Esta
+    ! opcion solo controla la geometria cartesiana escrita en los VTK.
+    integer, parameter :: VTK_MAP_PHYSICAL = 1
+    integer, parameter :: VTK_MAP_UNTWISTED = 2
+    integer :: vtk_mapping_id = VTK_MAP_PHYSICAL
 
     real*8 :: save_interval 
     real*8 :: next_save_time 

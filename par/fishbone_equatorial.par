@@ -1,0 +1,54 @@
+# Fishbone--Moncrief ecuatorial en Kerr--Schild
+#
+# Los limites theta_* y phi_* son multiplos o fracciones de pi.
+# Se aceptan decimales y cocientes: 0.5 y 1/2 significan pi/2.
+# Por ejemplo: theta_max = 1 significa pi y phi_max = 2 significa 2*pi.
+
+problem = fishbone_equatorial
+restart = false
+
+metric = kerr_schild
+geometry = spherical
+bh_mass = 1.0
+spin = 0.9
+adiabatic_index = 1.3333333333333333
+
+# Los radios del toro se expresan en unidades de la masa M del agujero negro.
+fm_inner_radius = 6.25
+fm_pressure_max_radius = 9.25
+fm_polytropic_constant = 0.0015
+
+nx = 400
+ny = 1
+nz = 200
+r_min = 1.2
+r_max = 40.0
+theta_min = 0
+theta_max = 1
+phi_min = 0
+phi_max = 2
+logarithmic_r = true
+
+reconstruction = weno5
+riemann_solver = hlle
+tvd_limiter = mc
+shock_sensor = false
+
+final_time = 1000.0
+cfl = 0.4
+save_interval = 10.0
+checkpoint_interval = 100.0
+
+output_prefix = FM_KS_a0.9
+output_folder = FM_KS_a0.9_data
+
+extract_gw = false
+extract_mdot = false
+ppi_diagnostics = true
+diagnostic_stride = 100
+
+perturbation = none
+perturbation_seed = 3435
+perturbation_time = 1000.0
+perturbation_amplitude = 0.01
+perturbation_mode = 1.0

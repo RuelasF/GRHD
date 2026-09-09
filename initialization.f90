@@ -10,294 +10,64 @@ module initialization
   use metrics
   use conditions
   use fluxes
+  use parameters, only: read_parameter_file, validate_parameters, print_parameter_summary
   implicit none
   private
   public :: initialize_problem, choose_numerical_architecture, allocate_and_grid, &
-            precalculate_metric_cache, apply_startup_overrides, apply_control_overrides
+            precalculate_metric_cache
 
 contains
 
-  subroutine override_integer_from_environment(variable_name, value, was_set)
-    character(len=*), intent(in) :: variable_name
-    integer, intent(inout) :: value
-    logical, intent(out), optional :: was_set
-    character(len=256) :: buffer
-    integer :: env_length, env_status, io_status, parsed_value
-
-    if (present(was_set)) was_set = .false.
-    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
-    if (env_status == 1) return
-    if (env_status /= 0 .or. env_length <= 0) then
-      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
-      error stop 1
-    end if
-
-    read(buffer(1:env_length), *, iostat=io_status) parsed_value
-    if (io_status /= 0) then
-      write(*,'(A,1X,A,1X,A)') 'Invalid integer environment variable:', &
-                               trim(variable_name), trim(buffer(1:env_length))
-      error stop 1
-    end if
-    value = parsed_value
-    if (present(was_set)) was_set = .true.
-  end subroutine override_integer_from_environment
-
-
-  subroutine override_real_from_environment(variable_name, value)
-    character(len=*), intent(in) :: variable_name
-    real*8, intent(inout) :: value
-    character(len=256) :: buffer
-    integer :: env_length, env_status, io_status
-    real*8 :: parsed_value
-
-    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
-    if (env_status == 1) return
-    if (env_status /= 0 .or. env_length <= 0) then
-      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
-      error stop 1
-    end if
-
-    read(buffer(1:env_length), *, iostat=io_status) parsed_value
-    if (io_status /= 0) then
-      write(*,'(A,1X,A,1X,A)') 'Invalid real environment variable:', &
-                               trim(variable_name), trim(buffer(1:env_length))
-      error stop 1
-    end if
-    value = parsed_value
-  end subroutine override_real_from_environment
-
-
-  subroutine override_string_from_environment(variable_name, value)
-    character(len=*), intent(in) :: variable_name
-    character(len=*), intent(inout) :: value
-    character(len=256) :: buffer
-    integer :: env_length, env_status
-
-    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
-    if (env_status == 1) return
-    if (env_status /= 0 .or. env_length <= 0 .or. env_length > len(value)) then
-      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
-      error stop 1
-    end if
-    value = buffer(1:env_length)
-  end subroutine override_string_from_environment
-
-
-  subroutine override_logical_from_environment(variable_name, value)
-    character(len=*), intent(in) :: variable_name
-    logical, intent(inout) :: value
-    character(len=256) :: buffer
-    integer :: env_length, env_status
-
-    call get_environment_variable(variable_name, buffer, length=env_length, status=env_status)
-    if (env_status == 1) return
-    if (env_status /= 0 .or. env_length <= 0) then
-      write(*,'(A,1X,A)') 'Invalid or truncated environment variable:', trim(variable_name)
-      error stop 1
-    end if
-
-    select case(trim(adjustl(buffer(1:env_length))))
-    case('1', 'true', 'TRUE', 'True', '.true.', '.TRUE.', 'yes', 'YES')
-      value = .true.
-    case('0', 'false', 'FALSE', 'False', '.false.', '.FALSE.', 'no', 'NO')
-      value = .false.
-    case default
-      write(*,'(A,1X,A,1X,A)') 'Invalid logical environment variable:', &
-                               trim(variable_name), trim(buffer(1:env_length))
-      error stop 1
-    end select
-  end subroutine override_logical_from_environment
-
-
-  subroutine apply_startup_overrides()
-    call override_logical_from_environment('GRHD_DO_RESTART', do_restart)
-    call override_string_from_environment('GRHD_RESTART_FILE', restart_file)
-  end subroutine apply_startup_overrides
-
-
-  subroutine apply_control_overrides()
-    call override_real_from_environment('GRHD_FINAL_TIME', final_time)
-    call override_real_from_environment('GRHD_CFL', CFL)
-    call override_real_from_environment('GRHD_SAVE_INTERVAL', save_interval)
-    call override_string_from_environment('GRHD_OUTPUT_PREFIX', output_prefix)
-    call override_string_from_environment('GRHD_OUTPUT_FOLDER', output_folder)
-    call override_logical_from_environment('GRHD_USE_SHOCK_SENSOR', use_shock_sensor)
-
-    call override_logical_from_environment('GRHD_DO_GW_EXTRACTION', do_gw_extraction)
-    call override_logical_from_environment('GRHD_DO_MDOT_EXTRACTION', do_mdot_extraction)
-    call override_logical_from_environment('GRHD_DO_PPI_DIAGNOSTICS', do_ppi_diagnostics)
-
-    call override_logical_from_environment('GRHD_APPLY_PERTURBATION', apply_perturbation)
-    call override_integer_from_environment('GRHD_PERTURBATION_TYPE', perturbation_type)
-    call override_integer_from_environment('GRHD_PERTURBATION_SEED', perturbation_seed)
-    call override_integer_from_environment('GRHD_DIAGNOSTIC_STRIDE', diagnostic_stride)
-    call override_real_from_environment('GRHD_PERTURBATION_TIME', perturbation_time)
-    call override_real_from_environment('GRHD_PERTURBATION_AMPLITUDE', perturbation_amplitude)
-    call override_real_from_environment('GRHD_PERTURBATION_MODE', perturbation_mode)
-
-    if (final_time < 0.0d0 .or. CFL <= 0.0d0 .or. save_interval <= 0.0d0) then
-      write(*,*) 'Invalid runtime control: require final_time >= 0, CFL > 0 and save_interval > 0.'
-      error stop 1
-    end if
-    if (diagnostic_stride < 1 .or. perturbation_seed < 0 .or. &
-        perturbation_time < 0.0d0 .or. perturbation_amplitude < 0.0d0 .or. &
-        perturbation_amplitude >= 1.0d0) then
-      write(*,*) 'Invalid perturbation or diagnostic runtime control.'
-      error stop 1
-    end if
-    if (perturbation_type < PERT_NONE .or. perturbation_type > PERT_DENSITY_MODE) then
-      write(*,*) 'Invalid perturbation type. Use 0:none, 1:pressure noise, 2:density noise, 3:density mode.'
-      error stop 1
-    end if
-    if (perturbation_type == PERT_NONE) apply_perturbation = .false.
-  end subroutine apply_control_overrides
-
-
-  subroutine apply_runtime_overrides()
-    call override_string_from_environment('GRHD_METRIC_TYPE', metric_type)
-    ! EF es Schwarzschild y, por definición, usa a=0. Esto también evita que
-    ! el a_spin=0.9 del setup KS se filtre al inicializador FM al comparar EF.
-    if (trim(metric_type) == 'Eddington-Finkelstein') a_spin = 0.0d0
-    call override_real_from_environment('GRHD_A_SPIN', a_spin)
-
-    call override_integer_from_environment('GRHD_NX', nx)
-    call override_integer_from_environment('GRHD_NY', ny)
-    call override_integer_from_environment('GRHD_NZ', nz)
-    call override_real_from_environment('GRHD_R_MIN', r_min)
-    call override_real_from_environment('GRHD_R_MAX', r_max)
-    call override_logical_from_environment('GRHD_USE_LOG_R', use_log_r)
-    call apply_control_overrides()
-
-    if (nx < 1 .or. ny < 1 .or. nz < 1 .or. r_max <= r_min) then
-      write(*,*) 'Invalid grid override: require positive dimensions and r_max > r_min.'
-      error stop 1
-    end if
-    if (use_log_r .and. r_min <= 0.0d0) then
-      write(*,*) 'Invalid logarithmic grid: r_min must be positive.'
-      error stop 1
-    end if
-    select case(trim(metric_type))
-    case('Minkowski')
-      if (abs(a_spin) > 0.0d0) then
-        write(*,*) 'Invalid spin: Minkowski requires a_spin = 0.'
-        error stop 1
-      end if
-    case('Eddington-Finkelstein')
-      if (abs(a_spin) > 0.0d0) then
-        write(*,*) 'Invalid spin: Eddington-Finkelstein is Schwarzschild and requires a_spin = 0.'
-        error stop 1
-      end if
-    case('Kerr-Schild')
-      if (abs(a_spin) > bh_mass + 64.0d0 * epsilon(1.0d0) * max(1.0d0, bh_mass)) then
-        write(*,*) 'Invalid Kerr spin: require |a_spin| <= bh_mass.'
-        error stop 1
-      end if
-    case default
-      write(*,*) 'Invalid metric override: ', trim(metric_type)
-      error stop 1
-    end select
-  end subroutine apply_runtime_overrides
-
   ! Subrutina: choose_numerical_architecture
-  ! Menú interactivo para definir la arquitectura espacial completa.
-  ! Asigna los IDs numéricos del Reconstructor y del Solucionador de Riemann.
+  ! Deriva la arquitectura espacial a partir de los IDs leidos del archivo .par.
   subroutine choose_numerical_architecture()
-    integer :: choice_rec, choice_limiter, choice_solver
-    logical :: limiter_from_environment
-
-    ! --- 1. SELECCIÓN DEL RECONSTRUCTOR ---
-    print *, "=========================================="
-    print *, "Choose reconstruction method:"
-    print *, "1. Godunov (1st order) - Alta disipacion (Solo depuracion)"
-    print *, "2. TVD    (2nd order) - Robustez estandar balanceada"
-    print *, "3. WENO3  (3rd order) - Precision intermedia"
-    print *, "4. MP5    (5th order) - Resolucion extrema de choques (Sharp)"
-    print *, "5. WENO5  (5th order) - Maxima fidelidad en turbulencia (Smooth)"
-    
-    ! RECORDATORIO: Descomentar para producción interactiva
-    ! read *, choice_rec
-    choice_rec = 5
-    call override_integer_from_environment('GRHD_RECONSTRUCTION', choice_rec)
-
-    select case(choice_rec)
-    case(1)
-      rec_method_id = REC_GODUNOV
+    ! Los identificadores se configuran desde el archivo .par. Esta rutina
+    ! solamente deriva nghost y los nombres usados por las salidas.
+    select case(rec_method_id)
+    case(REC_GODUNOV)
       scheme_name = 'godunov'
-      nghost = 1  
-    case(2)
-      rec_method_id = REC_TVD
-      nghost = 2  
-      
-      print *, "Choose TVD limiter:"
-      print *, "1. Minmod (Disipativo, estable)"
-      print *, "2. Superbee (Compresivo, choques afilados)"
-      print *, "3. MC (Estandar TVD, balanceado)"
-      choice_limiter = 3
-      call override_integer_from_environment('GRHD_TVD_LIMITER', choice_limiter, &
-                                             limiter_from_environment)
-      if (.not. limiter_from_environment) read *, choice_limiter
-
-      select case(choice_limiter)
-      case(1)
-        tvd_limiter_id = LIM_MINMOD
+      nghost = 1
+    case(REC_TVD)
+      nghost = 2
+      select case(tvd_limiter_id)
+      case(LIM_MINMOD)
         scheme_name = 'minmod'
-      case(2)
-        tvd_limiter_id = LIM_SUPERBEE
+      case(LIM_SUPERBEE)
         scheme_name = 'superbee'
-      case(3)
-        tvd_limiter_id = LIM_MC
+      case(LIM_MC)
         scheme_name = 'mc'
       case default
-        tvd_limiter_id = LIM_MC
-        scheme_name = 'mc'
+        write(*,*) 'Invalid TVD limiter identifier.'
+        error stop 1
       end select
-    case(3)
-      rec_method_id = REC_WENO3
+    case(REC_WENO3)
       scheme_name = 'weno3'
       nghost = 2
-    case(4)
-      rec_method_id = REC_MP5
-      scheme_name = 'mp5'
-      nghost = 3  
-    case(5)
-      rec_method_id = REC_WENO5
-      scheme_name = 'weno5'
-      nghost = 3  
-    case default
-      print *, "Invalid choice. Using Default: MP5."
-      rec_method_id = REC_MP5
+    case(REC_MP5)
       scheme_name = 'mp5'
       nghost = 3
+    case(REC_WENO5)
+      scheme_name = 'weno5'
+      nghost = 3
+    case default
+      write(*,*) 'Invalid reconstruction identifier.'
+      error stop 1
     end select
 
-    ! --- 2. SELECCIÓN DEL SOLUCIONADOR DE RIEMANN ---
-    print *, "=========================================="
-    print *, "Choose Riemann Solver:"
-    print *, "1. HLLE (Ultra-robusto, disipativo. Ideal para Agujeros Negros)"
-    print *, "2. HLLC (Baja disipacion, resuelve contacto. Ideal para Jets/KHI)"
-    
-    ! RECORDATORIO: Descomentar para producción interactiva
-    ! read *, choice_solver
-    choice_solver = 1
-    call override_integer_from_environment('GRHD_RIEMANN_SOLVER', choice_solver)
-
-    select case(choice_solver)
-    case(1)
-      riemann_solver_id = RS_HLLE
+    select case(riemann_solver_id)
+    case(RS_HLLE)
       solver_name = 'hlle'
-    case(2)
+    case(RS_HLLC)
       if (is_mhd) then
         riemann_solver_id = RS_HLLD
         solver_name = 'hlld'
         print *, ">> INFO: MHD activado. Cambiando HLLC por HLLD automáticamente."
       else
-        riemann_solver_id = RS_HLLC
         solver_name = 'hllc'
       end if
     case default
-      print *, "Invalid choice. Using Default: HLLE."
-      riemann_solver_id = RS_HLLE
-      solver_name = 'hlle'
+      write(*,*) 'Invalid Riemann-solver identifier.'
+      error stop 1
     end select
 
     ! Unimos los nombres (Ej. 'weno5_hllc' o 'mp5_hlle')
@@ -583,7 +353,15 @@ contains
             alpha_f_y(i,j,k) = a
             beta_f_y(:,i,j,k) = b(:)
             gamma_f_y(:,:,i,j,k) = g(:,:)
-            sqrt_gamma_f_y(i,j,k) = sqrt(det_local)
+            if (trim(geom_type) == 'Spherical' .and. &
+                abs(sin(y_face(j-1))) <= 64.0d0*epsilon(1.0d0)) then
+              ! La cara polar colapsa a una línea: su elemento de área es cero.
+              ! Se fija exactamente para que el redondeo de sin(pi) no deje un
+              ! área espuria en el polo sur.
+              sqrt_gamma_f_y(i,j,k) = 0.0d0
+            else
+              sqrt_gamma_f_y(i,j,k) = sqrt(det_local)
+            end if
           end do
         end do
       end do
@@ -615,27 +393,9 @@ contains
   ! Subrutina: initialize_problem
   ! Punto de entrada principal invocado desde grhd2.f90.
   ! Orquesta la llamada a todas las rutinas de setup en el orden topológico correcto.
-  subroutine initialize_problem()
-
-    print *, "=========================================="
-    print *, "Select test case:"
-    print *, "1. Sod Shock Tube (1D SRHD)"
-    print *, "2. Blast Wave (1D SRHD)"
-    print *, "3. Shu-Osher (1D SRHD)"
-    print *, "4. Kelvin-Helmholtz Instability (2D SRHD)"
-    print *, "5. Axisymmetric Jet (2D SRHD)"
-    print *, "6. Convergence Test"
-    print *, "7. Michel Accretion (1D GRHD)"
-    print *, "8. Dust Accretion (1D GRHD)"
-    print *, "9. Off-axis Blast Wave (2D GRHD)"
-    print *, "10. Fishbone-Moncrief Torus (2D Equatorial GRHD)"
-    print *, "11. Fishbone-Moncrief Torus (2D Sagital GRHD)"
-    print *, "12. Fishbone-Moncrief Torus (3D GRHD)"
-    
-    ! RECORDATORIO: Descomentar para producción interactiva
-    ! read *, case_id
-    case_id = 10
-    call override_integer_from_environment('GRHD_CASE_ID', case_id)
+  subroutine initialize_problem(parameter_file, check_only)
+    character(len=*), intent(in) :: parameter_file
+    logical, intent(in) :: check_only
 
     ! 1. CONFIGURACIÓN DEL PROBLEMA (Cada rutina define sus propios parámetros y geometría)
     select case(case_id)
@@ -681,8 +441,9 @@ contains
       stop
     end select
 
-    ! Permite barridos reproducibles sin editar initialization.f90 entre corridas.
-    call apply_runtime_overrides()
+    ! El preset aporta valores por omision; el archivo .par tiene la ultima palabra.
+    call read_parameter_file(parameter_file, .false.)
+    call validate_parameters(parameter_file)
 
     ! 2. ASIGNACIÓN DE MÉTRICA
     call set_metric_type()
@@ -696,7 +457,13 @@ contains
     tau_floor = p_floor * (g1 - 1.0d0)
 
     ! 3. ARQUITECTURA NUMÉRICA (Define 'scheme_name' y 'nghost')
-    call choose_numerical_architecture() 
+    call choose_numerical_architecture()
+
+    call print_parameter_summary(parameter_file)
+    if (check_only) then
+      print *, 'Archivo de parametros valido; no se inicio la simulacion.'
+      return
+    end if
 
     ! 4. CREACIÓN DE DIRECTORIOS
     call system('mkdir -p ' // trim(output_folder) //  '/' // trim(scheme_name))
@@ -721,7 +488,12 @@ contains
     do_mdot_extraction = .false.
     do_gw_extraction = .false.
 
-    adb_idx = 1.4d0 
+    adb_idx = 1.4d0
+    sod_interface = 0.5d0
+    sod_rho_left = 1.0d0
+    sod_rho_right = 0.125d0
+    sod_pressure_left = 1.0d0
+    sod_pressure_right = 0.1d0
     
     nx = 200 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
@@ -743,7 +515,12 @@ contains
     do_mdot_extraction = .false.
     do_gw_extraction = .false.
 
-    adb_idx = 5.0d0/3.0d0 
+    adb_idx = 5.0d0/3.0d0
+    strong_interface = 0.5d0
+    strong_rho_left = 1.0d0
+    strong_rho_right = 1.0d0
+    strong_pressure_left = 1000.0d0
+    strong_pressure_right = 0.01d0
     
     nx = 400 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
@@ -766,6 +543,13 @@ contains
     do_gw_extraction = .false.
 
     adb_idx = 5.0d0/3.0d0
+    shu_interface = 0.5d0
+    shu_rho_left = 5.0d0
+    shu_pressure_left = 50.0d0
+    shu_rho_right = 2.0d0
+    shu_rho_amplitude = 0.3d0
+    shu_wave_number = 50.0d0
+    shu_pressure_right = 5.0d0
     
     nx = 400 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
@@ -788,6 +572,14 @@ contains
     do_gw_extraction = .false.
 
     adb_idx = 5.0d0 / 3.0d0 ! Gamma = 5/3 (Monoatómico estándar para astrofísica)
+    khi_half_width = 0.25d0
+    khi_rho_inner = 2.0d0
+    khi_rho_outer = 1.0d0
+    khi_vx_inner = 0.5d0
+    khi_vx_outer = -0.5d0
+    khi_pressure = 2.5d0
+    khi_perturbation_amplitude = 0.01d0
+    khi_perturbation_wave_number = 10.0d0
     
     nx = 400 ; r_min = -0.5d0 ; r_max = 0.5d0
     ny = 1   ; y_min = 0.0d0  ; y_max = 1.0d0
@@ -810,6 +602,14 @@ contains
     do_gw_extraction = .false.
 
     adb_idx = 5.0d0 / 3.0d0
+    jet_ambient_density = 10.0d0
+    jet_ambient_pressure = 0.01d0
+    jet_ambient_velocity = 0.0d0
+    jet_nozzle_radius = 1.0d0
+    jet_nozzle_length = 1.0d0
+    jet_density = 0.1d0
+    jet_pressure = 0.01d0
+    jet_velocity = 0.99d0
     
     ! Dominio de Del Zanna (Astrofísica Clásica)
     nx = 320 ; r_min = 0.0d0 ; r_max = 16.0d0
@@ -833,6 +633,11 @@ contains
     do_gw_extraction = .false.
 
     adb_idx = 4.0d0 / 3.0d0
+    advected_wave_density = 1.0d0
+    advected_wave_amplitude = 0.1d0
+    advected_wave_speed = 0.5d0
+    advected_wave_pressure = 1.0d0
+    advected_wave_number = 2.0d0
     
     nx = 2048 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1    ; y_min = 0.0d0 ; y_max = 1.0d0
@@ -856,6 +661,8 @@ contains
 
     adb_idx = 4.0d0 / 3.0d0 ! Fluido dominado por radiación
     bh_mass = 1.0d0
+    michel_critical_radius = 100.0d0
+    michel_critical_density = 0.1d0
     
     nx = 400 ; r_min = 1.01d0 ; r_max = 51.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
@@ -882,6 +689,7 @@ contains
 
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
+    dust_accretion_constant = -0.5d0
     
     nx = 500 ; r_min = 1.0d0 ; r_max = 51.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
@@ -905,6 +713,13 @@ contains
 
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
+    offaxis_radial_center = 15.0d0
+    offaxis_phi_center = pi
+    offaxis_width = 1.5d0
+    offaxis_background_density = 0.1d0
+    offaxis_background_pressure = 0.1d0
+    offaxis_density_amplitude = 1.0d0
+    offaxis_pressure_amplitude = 1.0d0
     
     nx = 400 ; r_min = 1.0d0 ; r_max = 121.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
@@ -931,6 +746,9 @@ contains
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
     a_spin = 0.9d0
+    fm_inner_radius = 6.25d0
+    fm_pressure_max_radius = 9.25d0
+    fm_polytropic_constant = 0.0015d0
     
     ! Caso original Ecuatorial (1D/2D en phi)
     nx = 400 ; r_min = 1.2d0 ; r_max = 40.0d0
@@ -956,6 +774,9 @@ contains
 
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
+    fm_inner_radius = 6.25d0
+    fm_pressure_max_radius = 9.25d0
+    fm_polytropic_constant = 0.0015d0
     
     nx = 400 ; r_min = 2.0d0 ; r_max = 200.0d0
     ny = 200 ; y_min = 0.0d0 ; y_max = pi      ! De Polo a Polo
@@ -981,6 +802,9 @@ contains
 
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
+    fm_inner_radius = 6.0d0
+    fm_pressure_max_radius = 12.0d0
+    fm_polytropic_constant = 0.015d0
     
     nx = 100 ; r_min = 1.0d0 ; r_max = 121.0d0
     ny = 100 ; y_min = 0.0d0 ; y_max = pi

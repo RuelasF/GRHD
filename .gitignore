@@ -5,6 +5,9 @@ grhd2
 tests/test_hllc_fluxes
 tests/test_gw_geometry
 tests/test_gw_stress
+tests/test_fm_initial
+tests/test_polar_boundaries
+tests/test_multidimensional_cfl
 
 # --- Resultados y Checkpoints de Simulación ---
 *.dat

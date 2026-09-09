@@ -1,0 +1,51 @@
+# Dato inicial tridimensional Fishbone--Moncrief en Kerr--Schild, a=0.
+# theta_* y phi_* se expresan en unidades de pi.
+
+problem = fishbone_3d
+restart = false
+
+metric = kerr_schild
+geometry = spherical
+bh_mass = 1.0
+spin = 0.0
+adiabatic_index = 1.3333333333333333
+
+fm_inner_radius = 6.25
+fm_pressure_max_radius = 9.25
+fm_polytropic_constant = 0.0015
+
+nx = 64
+ny = 48
+nz = 64
+r_min = 1.2
+r_max = 40.0
+theta_min = 0
+theta_max = 1
+phi_min = 0
+phi_max = 2
+logarithmic_r = true
+
+reconstruction = weno5
+riemann_solver = hlle
+tvd_limiter = mc
+shock_sensor = false
+
+# Sólo se escribe el estado inicial en t=0.
+final_time = 0
+cfl = 0.4
+save_interval = 10.0
+checkpoint_interval = 100.0
+
+output_prefix = FM_KS_a0.0_initial
+output_folder = FM_KS_a0.0_initial_data
+
+extract_gw = false
+extract_mdot = false
+ppi_diagnostics = false
+diagnostic_stride = 100
+
+perturbation = none
+perturbation_seed = 3435
+perturbation_time = 1000.0
+perturbation_amplitude = 0.01
+perturbation_mode = 1.0

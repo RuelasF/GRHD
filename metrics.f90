@@ -9,9 +9,7 @@
 ! 1. Minkowski (Cartesiano 1D/2D Plano)
 ! 2. Minkowski Cilíndrico (Axisimétrico sin gravedad)
 ! 3. Schwarzschild en coordenadas de Eddington-Finkelstein (EF).
-!    ¿Por qué EF?: Las coordenadas de Schwarzschild estándar tienen una singularidad 
-!    de coordenadas en el horizonte de eventos (r = 2M). Las coordenadas EF son 
-!    "penetrantes", permitiendo que el flujo hidrodinámico cruze suavemente el horizonte.
+! 4. Kerr en coordenadas de Kerr-Schild (KS).
 ! =======================================================================================
 
 module metrics
@@ -26,8 +24,7 @@ module metrics
   ! ========================================================================
   public :: calculate_metric, calculate_christoffel_symbols, &
             calculate_metric_derivatives, calculate_stress_energy_tensor, &
-            set_metric_type, event_horizon_radius, &
-            eulerian_to_coordinate_rates, ks_spherical_to_cartesian
+            set_metric_type, event_horizon_radius
 
   ! ========================================================================
   ! INTERFACES ABSTRACTAS (Plantillas para los punteros de función)
@@ -90,63 +87,6 @@ contains
     r_plus = mass + sqrt(max(0.0d0, discriminant))
   end function event_horizon_radius
 
-
-  subroutine eulerian_to_coordinate_rates(r_phys, alpha, beta, velocity, &
-                                           logarithmic_r, coordinate_rates)
-    implicit none
-    real*8, intent(in) :: r_phys, alpha
-    real*8, intent(in) :: beta(3), velocity(3)
-    logical, intent(in) :: logarithmic_r
-    real*8, intent(out) :: coordinate_rates(3)
-
-    ! Las primitivas del código son velocidades eulerianas:
-    ! v^i = u^i/(alpha*u^t) + beta^i/alpha. Por tanto,
-    ! dq^i/dt = u^i/u^t = alpha*v^i - beta^i.
-    coordinate_rates = alpha * velocity - beta
-
-    ! En una malla x=ln(r), la primera componente es dx/dt; la rutina de
-    ! transformación cartesiana necesita dr/dt = r*dx/dt.
-    if (logarithmic_r) coordinate_rates(1) = r_phys * coordinate_rates(1)
-  end subroutine eulerian_to_coordinate_rates
-
-
-  subroutine ks_spherical_to_cartesian(r_phys, theta, phi, spin, &
-                                       coordinate_rates, position, velocity, &
-                                       flat_jacobian)
-    implicit none
-    real*8, intent(in) :: r_phys, theta, phi, spin
-    real*8, intent(in) :: coordinate_rates(3)
-    real*8, intent(out) :: position(3), velocity(3), flat_jacobian
-    real*8 :: sin_theta, cos_theta, sin_phi, cos_phi, sigma
-    real*8 :: r_dot, theta_dot, phi_dot
-
-    sin_theta = sin(theta)
-    cos_theta = cos(theta)
-    sin_phi = sin(phi)
-    cos_phi = cos(phi)
-    r_dot = coordinate_rates(1)
-    theta_dot = coordinate_rates(2)
-    phi_dot = coordinate_rates(3)
-
-    ! Coordenadas cartesianas Kerr--Schild compatibles con
-    ! gamma_{r phi}(M=0) = -a sin(theta)^2 en metric_ks_phys.
-    position(1) = (r_phys * cos_phi - spin * sin_phi) * sin_theta
-    position(2) = (r_phys * sin_phi + spin * cos_phi) * sin_theta
-    position(3) = r_phys * cos_theta
-
-    velocity(1) = r_dot * cos_phi * sin_theta &
-                + theta_dot * (r_phys * cos_phi - spin * sin_phi) * cos_theta &
-                - phi_dot * (r_phys * sin_phi + spin * cos_phi) * sin_theta
-    velocity(2) = r_dot * sin_phi * sin_theta &
-                + theta_dot * (r_phys * sin_phi + spin * cos_phi) * cos_theta &
-                + phi_dot * (r_phys * cos_phi - spin * sin_phi) * sin_theta
-    velocity(3) = r_dot * cos_theta - r_phys * theta_dot * sin_theta
-
-    ! Jacobiano de (r,theta,phi) a las coordenadas cartesianas KS. Para
-    ! a=0 recupera r^2 sin(theta).
-    sigma = r_phys**2 + spin**2 * cos_theta**2
-    flat_jacobian = sigma * sin_theta
-  end subroutine ks_spherical_to_cartesian
 
   ! ========================================================================
   ! INICIALIZADOR DE LA MÉTRICA (LLAMADO UNA VEZ EN EL ARRANQUE)
@@ -414,14 +354,20 @@ contains
     temp_gamma(2,2) = g22
     temp_gamma(3,3) = g33
 
-    temp_gmunu(:,:) = 0.0d0
-    temp_gmunu(0,0) = -1.0d0 / (temp_alpha**2)
-    temp_gmunu(0,1:3) = temp_beta / temp_alpha**2
-    temp_gmunu(1:3,0) = temp_gmunu(0,1:3)
+    ! La inversa no existe sobre el eje polar. Las llamadas para construir la
+    ! caché de caras sólo requieren la métrica covariante, así que evitamos
+    ! evaluar 1/g_phiphi salvo cuando gmunu fue solicitado explícitamente.
+    if (present(gmunu)) then
+      temp_gmunu(:,:) = 0.0d0
+      temp_gmunu(0,0) = -1.0d0 / (temp_alpha**2)
+      temp_gmunu(0,1:3) = temp_beta / temp_alpha**2
+      temp_gmunu(1:3,0) = temp_gmunu(0,1:3)
 
-    temp_gmunu(1,1) = 1.0d0/g11 - (temp_beta(1)**2) / (temp_alpha**2)
-    temp_gmunu(2,2) = 1.0d0/g22 - (temp_beta(2)**2) / (temp_alpha**2)
-    temp_gmunu(3,3) = 1.0d0/g33 - (temp_beta(3)**2) / (temp_alpha**2)
+      temp_gmunu(1,1) = 1.0d0/g11 - (temp_beta(1)**2) / (temp_alpha**2)
+      temp_gmunu(2,2) = 1.0d0/g22 - (temp_beta(2)**2) / (temp_alpha**2)
+      temp_gmunu(3,3) = 1.0d0/g33 - (temp_beta(3)**2) / (temp_alpha**2)
+      gmunu = temp_gmunu
+    end if
 
     if (abs(temp_gamma(1,2)) > 1.0d-14 .or. abs(temp_gamma(1,3)) > 1.0d-14) then
       print *, "¡ALERTA Métrica! Términos cruzados espaciales NO son cero en EF."
@@ -435,7 +381,6 @@ contains
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
     if (present(gamma))    gamma    = temp_gamma
-    if (present(gmunu))    gmunu    = temp_gmunu
     if (present(det))      det      = temp_det
     if (present(dlnalpha)) dlnalpha = temp_dlna
   end subroutine metric_ef_phys
@@ -534,15 +479,19 @@ contains
     temp_gamma(2,2) = g22
     temp_gamma(3,3) = g33
 
-    ! Métrica espacio-temporal completa 4x4 (g^mu^nu contravariante)
-    temp_gmunu(:,:) = 0.0d0
-    temp_gmunu(0,0) = -1.0d0 / (temp_alpha**2)
-    temp_gmunu(0,1:3) = temp_beta / temp_alpha**2
-    temp_gmunu(1:3,0) = temp_gmunu(0,1:3)
+    ! Sólo construir la inversa cuando el llamador la necesita. En las caras
+    ! polares g_phiphi=0 y la inversa coordenada no está definida.
+    if (present(gmunu)) then
+      temp_gmunu(:,:) = 0.0d0
+      temp_gmunu(0,0) = -1.0d0 / (temp_alpha**2)
+      temp_gmunu(0,1:3) = temp_beta / temp_alpha**2
+      temp_gmunu(1:3,0) = temp_gmunu(0,1:3)
 
-    temp_gmunu(1,1) = 1.0d0/g11 - (temp_beta(1)**2) / (temp_alpha**2)
-    temp_gmunu(2,2) = 1.0d0/g22 - (temp_beta(2)**2) / (temp_alpha**2)
-    temp_gmunu(3,3) = 1.0d0/g33 - (temp_beta(3)**2) / (temp_alpha**2)
+      temp_gmunu(1,1) = 1.0d0/g11 - (temp_beta(1)**2) / (temp_alpha**2)
+      temp_gmunu(2,2) = 1.0d0/g22 - (temp_beta(2)**2) / (temp_alpha**2)
+      temp_gmunu(3,3) = 1.0d0/g33 - (temp_beta(3)**2) / (temp_alpha**2)
+      gmunu = temp_gmunu
+    end if
 
     ! Derivada logarítmica del lapso (d_x ln(alpha) = r * d_r ln(alpha))
     temp_dlna = 0.0d0
@@ -551,7 +500,6 @@ contains
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
     if (present(gamma))    gamma    = temp_gamma
-    if (present(gmunu))    gmunu    = temp_gmunu
     if (present(det))      det      = temp_det
     if (present(dlnalpha)) dlnalpha = temp_dlna
   end subroutine metric_ef_log
@@ -682,23 +630,25 @@ contains
     ! Determinante espacial de gamma_ij
     temp_det = (Sigma**2) * sin2 * (1.0d0 + 2.0d0 * H)
 
-    ! 4. Métrica espacio-temporal contravariante (g^munu)
-    temp_gmunu = 0.0d0
-    temp_gmunu(0,0) = -(1.0d0 + 2.0d0 * H)
-    temp_gmunu(0,1) = 2.0d0 * H
-    temp_gmunu(1,0) = temp_gmunu(0,1)
-    
-    temp_gmunu(1,1) = Delta / Sigma
-    temp_gmunu(1,3) = a / Sigma
-    temp_gmunu(3,1) = temp_gmunu(1,3)
-    
-    temp_gmunu(2,2) = 1.0d0 / Sigma
-    
-    ! Blindaje polar estricto para g^phiphi para evitar divisiones por cero en el eje
-    if (abs(sin_th) > 1.0d-15) then
+    ! 4. Métrica espacio-temporal contravariante (g^munu). No se construye
+    ! para la caché de caras: g^phiphi no está definida exactamente en el eje.
+    if (present(gmunu)) then
+      temp_gmunu = 0.0d0
+      temp_gmunu(0,0) = -(1.0d0 + 2.0d0 * H)
+      temp_gmunu(0,1) = 2.0d0 * H
+      temp_gmunu(1,0) = temp_gmunu(0,1)
+
+      temp_gmunu(1,1) = Delta / Sigma
+      temp_gmunu(1,3) = a / Sigma
+      temp_gmunu(3,1) = temp_gmunu(1,3)
+
+      temp_gmunu(2,2) = 1.0d0 / Sigma
+      if (abs(sin_th) > 1.0d-15) then
         temp_gmunu(3,3) = 1.0d0 / (Sigma * sin2)
-    else
+      else
         temp_gmunu(3,3) = 1.0d0 / (Sigma * 1.0d-30)
+      end if
+      gmunu = temp_gmunu
     end if
 
     ! 5. d(ln alpha) / dx^i
@@ -717,7 +667,6 @@ contains
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
     if (present(gamma))    gamma    = temp_gamma
-    if (present(gmunu))    gmunu    = temp_gmunu
     if (present(det))      det      = temp_det
     if (present(dlnalpha)) dlnalpha = temp_dlna
 
@@ -910,29 +859,30 @@ contains
     ! Determinante espacial LÓGICO (det_log = r^2 * det_phys)
     temp_det = (Sigma**2 * sin2 * (1.0d0 + 2.0d0 * H)) * r_phys**2
 
-    ! 4. Métrica espacio-temporal completa LÓGICA contravariante (g^munu_log)
-    ! Los componentes contravariantes se transforman con derivadas inversas (DIVIDIENDO entre r)
-    temp_gmunu = 0.0d0
-    temp_gmunu(0,0) = -(1.0d0 + 2.0d0 * H)
-    
-    ! g^xt = g^rt / r
-    temp_gmunu(0,1) = (2.0d0 * H) / r_phys
-    temp_gmunu(1,0) = temp_gmunu(0,1)
-    
-    ! g^xx = g^rr / r^2
-    temp_gmunu(1,1) = (Delta / Sigma) / (r_phys**2)
-    
-    ! g^xphi = g^rphi / r
-    temp_gmunu(1,3) = (a / Sigma) / r_phys
-    temp_gmunu(3,1) = temp_gmunu(1,3)
-    
-    temp_gmunu(2,2) = 1.0d0 / Sigma
-    
-    ! Blindaje polar para evitar divisiones por cero en el eje
-    if (abs(sin_th) > 1.0d-15) then
+    ! 4. Métrica espacio-temporal completa LÓGICA contravariante. Sólo se
+    ! evalúa cuando se solicita; no existe como matriz finita sobre el eje.
+    if (present(gmunu)) then
+      temp_gmunu = 0.0d0
+      temp_gmunu(0,0) = -(1.0d0 + 2.0d0 * H)
+
+      ! g^xt = g^rt / r
+      temp_gmunu(0,1) = (2.0d0 * H) / r_phys
+      temp_gmunu(1,0) = temp_gmunu(0,1)
+
+      ! g^xx = g^rr / r^2
+      temp_gmunu(1,1) = (Delta / Sigma) / (r_phys**2)
+
+      ! g^xphi = g^rphi / r
+      temp_gmunu(1,3) = (a / Sigma) / r_phys
+      temp_gmunu(3,1) = temp_gmunu(1,3)
+
+      temp_gmunu(2,2) = 1.0d0 / Sigma
+      if (abs(sin_th) > 1.0d-15) then
         temp_gmunu(3,3) = 1.0d0 / (Sigma * sin2)
-    else
+      else
         temp_gmunu(3,3) = 1.0d0 / (Sigma * 1.0d-30)
+      end if
+      gmunu = temp_gmunu
     end if
 
     ! 5. d(ln alpha) / dx^i en la malla lógica (d_x = r * d_r)
@@ -949,7 +899,6 @@ contains
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
     if (present(gamma))    gamma    = temp_gamma
-    if (present(gmunu))    gmunu    = temp_gmunu
     if (present(det))      det      = temp_det
     if (present(dlnalpha)) dlnalpha = temp_dlna
   end subroutine metric_ks_log

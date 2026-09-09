@@ -9,11 +9,13 @@
 module conditions
   use variables
   use metrics
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
   private
   public :: set_initial_conditions, set_boundary_conditions, &
     inject_pressure_noise, setup_michel_accretion_initial, &
-    inject_density_mode, inject_density_noise
+    inject_density_mode, inject_density_noise, &
+    prepare_fishbone_moncrief, evaluate_fishbone_moncrief_state
 
 contains
 
@@ -22,54 +24,47 @@ contains
   ! matriz de primitivas su estado termodinámico y cinemático en T=0.
   subroutine set_initial_conditions()
     integer :: i, j, k
-    real*8  :: C_const = -0.5d0
-    real*8  :: sinc_factor
-    real*8  :: x_center, z_center, dist_sq, width, exponent, gauss_prof
+    real*8  :: sinc_factor, sinc_argument
+    real*8  :: dist_sq, exponent, gauss_prof
     real*8  :: x_pos, z_pos
-
-    ! --- Variables Físicas Locales (Inicializadas en 0 para evitar warnings) ---
-    real*8  :: r_critical   = 0.0d0  ! Radio sónico para acreción de Michel
-    real*8  :: rho_critical = 0.0d0  ! Densidad en el punto crítico (o infinito)
-    real*8  :: r_in         = 0.0d0  ! Radio interno del disco/toro
-    real*8  :: r_max_dens   = 0.0d0  ! Radio de densidad y presión máxima
-    real*8  :: K_poly       = 0.0d0  ! Constante politrópica (P = K * rho^Gamma)
 
     ! Limpieza de RAM: Previene que celdas fantasma contengan "basura" de ejecuciones previas
     p = 0.0d0
-    sinc_factor = sin(pi * dx) / (pi * dx)
 
     ! Se soporta tanto el nombre clásico como el ID numérico en formato string
     select case(trim(case_name)) 
 
     case('Sod', '1') ! Tubo de Choque de Sod (Prueba térmica base)
       do i = -nghost, nx+nghost
-        if (x(i) < 0.5d0) then
-          p(eq_de, i, :, :) = 1.0d0
-          p(eq_pr, i, :, :) = 1.0d0
+        if (x(i) < sod_interface) then
+          p(eq_de, i, :, :) = sod_rho_left
+          p(eq_pr, i, :, :) = sod_pressure_left
         else
-          p(eq_de, i, :, :) = 0.125d0
-          p(eq_pr, i, :, :) = 0.1d0
+          p(eq_de, i, :, :) = sod_rho_right
+          p(eq_pr, i, :, :) = sod_pressure_right
         end if
       end do
 
     case('Strong', '2') ! Blast Wave (Captura de choques extremos)
       do i = -nghost, nx+nghost
-        p(eq_de, i, :, :) = 1.0d0
-        if (x(i) < 0.5d0) then
-          p(eq_pr, i, :, :) = 1000.0d0   
+        if (x(i) < strong_interface) then
+          p(eq_de, i, :, :) = strong_rho_left
+          p(eq_pr, i, :, :) = strong_pressure_left
         else
-          p(eq_pr, i, :, :) = 0.01d0
+          p(eq_de, i, :, :) = strong_rho_right
+          p(eq_pr, i, :, :) = strong_pressure_right
         end if
       end do
 
     case('Shu', '3') ! Shu-Osher Relativista (Interacción Choque-Turbulencia)
       do i = -nghost, nx+nghost
-        if (x(i) < 0.5d0) then
-          p(eq_de, i, :, :) = 5.0d0
-          p(eq_pr, i, :, :) = 50.0d0
+        if (x(i) < shu_interface) then
+          p(eq_de, i, :, :) = shu_rho_left
+          p(eq_pr, i, :, :) = shu_pressure_left
         else
-          p(eq_de, i, :, :) = 2.0d0 + 0.3d0 * sin(50.0d0 * x(i))
-          p(eq_pr, i, :, :) = 5.0d0
+          p(eq_de, i, :, :) = shu_rho_right + &
+                               shu_rho_amplitude * sin(shu_wave_number * x(i))
+          p(eq_pr, i, :, :) = shu_pressure_right
         end if
       end do
 
@@ -83,19 +78,22 @@ contains
             z_pos = z(k) 
 
             ! Perfil Base Discontinuo (Sharp Interface)
-            if (abs(z_pos) < 0.25d0) then
-              p(eq_de, i, j, k) = 2.0d0
-              p(eq_vx, i, j, k) = 0.5d0
+            if (abs(z_pos) < khi_half_width) then
+              p(eq_de, i, j, k) = khi_rho_inner
+              p(eq_vx, i, j, k) = khi_vx_inner
             else
-              p(eq_de, i, j, k) = 1.0d0
-              p(eq_vx, i, j, k) = -0.5d0
+              p(eq_de, i, j, k) = khi_rho_outer
+              p(eq_vx, i, j, k) = khi_vx_outer
             end if
-            
-            p(eq_pr, i, j, k) = 2.5d0
-            p(eq_vy, i, j, k) = 0.0d0 
-            
+
+            p(eq_pr, i, j, k) = khi_pressure
+            p(eq_vy, i, j, k) = 0.0d0
+
             ! Perturbación de velocidad para detonar los vórtices
-            p(eq_vx, i, j, k) = p(eq_vx, i, j, k) * (1.0d0 + 0.01d0 * cos(10.0d0 * pi * x_pos) * cos(10.0d0 * pi * z_pos))
+            p(eq_vx, i, j, k) = p(eq_vx, i, j, k) * &
+              (1.0d0 + khi_perturbation_amplitude * &
+               cos(khi_perturbation_wave_number * pi * x_pos) * &
+               cos(khi_perturbation_wave_number * pi * z_pos))
           end do
         end do
       end do
@@ -107,14 +105,15 @@ contains
         do j = 1, ny
           do i = 1, nx
             ! Estado base: Ambiente denso y estático
-            p(eq_de, i, j, k) = 10.0d0
-            p(eq_pr, i, j, k) = 0.01d0
-            p(eq_vz, i, j, k) = 0.0d0
-            
+            p(eq_de, i, j, k) = jet_ambient_density
+            p(eq_pr, i, j, k) = jet_ambient_pressure
+            p(eq_vz, i, j, k) = jet_ambient_velocity
+
             ! "Tobera" de fluido relativista en el origen
-            if (x(i) <= 1.0d0 .and. z(k) <= 1.0d0) then
-              p(eq_de, i, j, k) = 0.1d0
-              p(eq_vz, i, j, k) = 0.99d0
+            if (x(i) <= jet_nozzle_radius .and. z(k) <= jet_nozzle_length) then
+              p(eq_de, i, j, k) = jet_density
+              p(eq_pr, i, j, k) = jet_pressure
+              p(eq_vz, i, j, k) = jet_velocity
             end if
           end do
         end do
@@ -123,20 +122,27 @@ contains
     case('Conv', '6') ! Test de Convergencia Espacial L1/L_inf
       print *, '-> Test de Convergencia inicializado'
 
+      sinc_argument = 0.5d0 * advected_wave_number * pi * dx
+      if (abs(sinc_argument) > epsilon(1.0d0)) then
+        sinc_factor = sin(sinc_argument) / sinc_argument
+      else
+        sinc_factor = 1.0d0
+      end if
+
       do i = 1, nx
-        p(eq_de, i, :, :) = 1.0d0 + advected_wave_amplitude * sinc_factor * &
-                            sin(2.0d0 * pi * x(i))
+        p(eq_de, i, :, :) = advected_wave_density + &
+                            advected_wave_amplitude * sinc_factor * &
+                            sin(advected_wave_number * pi * x(i))
       end do
 
       p(eq_vx, :, :, :) = advected_wave_speed
-      p(eq_pr, :, :, :) = 1.0d0
+      p(eq_pr, :, :, :) = advected_wave_pressure
 
     case('MichelA', '7') ! Acreción de Michel (Caída esférica de gas en un Agujero Negro)
       print *, "-> Inicializando Acrecion de Michel..."
-      r_critical   = 100.0d0
-      rho_critical = 1.0d-1
-      
-      call setup_michel_accretion_initial(p(:, 1:nx+nghost, 1:ny, 1:nz), r_critical, rho_critical)
+      call setup_michel_accretion_initial(p(:, 1:nx+nghost, 1:ny, 1:nz), &
+                                           michel_critical_radius, &
+                                           michel_critical_density)
       
       ! Guardamos el estado asintótico en el borde externo para usarlo como inyector
       if (.not. allocated(michel_injector)) allocate(michel_injector(neq, nghost, ny, nz))
@@ -150,19 +156,20 @@ contains
       end do
 
     case('Dust', '8') ! Dust accretion (Acreción de polvo en caída libre, Presión = 0)
-      p(eq_de, :, :, :) = -C_const/(x_max**2 * sqrt(2.0d0*bh_mass/x_max))
-      p(eq_vx, :, :, :) = -1.0d0/(sqrt(1.0d0+x_max/(2.0d0*bh_mass))*(1.0d0 + sqrt(2.0d0*bh_mass/x_max) + 2.0d0*bh_mass/x_max))
+      p(eq_de, :, :, :) = -dust_accretion_constant / &
+                           (r_max**2 * sqrt(2.0d0*bh_mass/r_max))
+      p(eq_vx, :, :, :) = -1.0d0 / &
+        (sqrt(1.0d0 + r_max/(2.0d0*bh_mass)) * &
+         (1.0d0 + sqrt(2.0d0*bh_mass/r_max) + 2.0d0*bh_mass/r_max))
 
     case('OffAxis', '9') ! Off-axis Blast Wave (Explosión asimétrica)
-      x_center = 15.0d0
-      z_center = pi
-      width = 1.5d0      
-
       do k = -nghost, nz+nghost
         do j = 1, ny
           do i = -nghost, nx+nghost
-            dist_sq = x(i)**2 + x_center**2 - 2.0d0 * x_center * x(i) * cos(z(k) - z_center)
-            exponent = -dist_sq / (width**2)
+            dist_sq = x(i)**2 + offaxis_radial_center**2 - &
+                      2.0d0 * offaxis_radial_center * x(i) * &
+                      cos(z(k) - offaxis_phi_center)
+            exponent = -dist_sq / (offaxis_width**2)
             
             if (exponent < -40.0d0) then
               gauss_prof = 0.0d0
@@ -170,35 +177,31 @@ contains
               gauss_prof = exp(exponent)
             end if
             
-            p(eq_de, i, j, k) = 0.1d0 + 1.0d0 * gauss_prof
-            p(eq_pr, i, j, k) = 0.1d0 + 1.0d0 * gauss_prof
+            p(eq_de, i, j, k) = offaxis_background_density + &
+                                 offaxis_density_amplitude * gauss_prof
+            p(eq_pr, i, j, k) = offaxis_background_pressure + &
+                                 offaxis_pressure_amplitude * gauss_prof
           end do
         end do
       end do
 
     case('FishMoncEqu', '10') ! Toro de Fishbone-Moncrief en corte ecuatorial (2D r-phi)
       print *, "-> Inicializando Toro de Fishbone-Moncrief (corte ecuatorial 2D)..."
-      r_in       = 6.25d0 * bh_mass      
-      r_max_dens = 9.25d0 * bh_mass  
-      K_poly     = 0.0015d0            
-      
-      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), r_in, r_max_dens, K_poly)
+      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), &
+        fm_inner_radius * bh_mass, fm_pressure_max_radius * bh_mass, &
+        fm_polytropic_constant)
 
     case('FishMoncSag', '11') ! Toro de Fishbone-Moncrief en corte sagital (2D r-theta)
       print *, "-> Inicializando Toro de Fishbone-Moncrief (corte sagital 2D)..."
-      r_in       = 6.25d0 * bh_mass      
-      r_max_dens = 9.25d0 * bh_mass  
-      K_poly     = 0.0015d0
-      
-      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), r_in, r_max_dens, K_poly)
+      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), &
+        fm_inner_radius * bh_mass, fm_pressure_max_radius * bh_mass, &
+        fm_polytropic_constant)
 
     case('FishMonc3D', '12')
       print *, "-> Inicializando Toro de Fishbone-Moncrief completo (3D)..."
-      r_in       = 6.0d0 * bh_mass      
-      r_max_dens = 12.0d0 * bh_mass  
-      K_poly     = 0.015d0
-      
-      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), r_in, r_max_dens, K_poly)
+      call setup_fishbone_moncrief_initial(p(:, 1:nx, 1:ny, 1:nz), &
+        fm_inner_radius * bh_mass, fm_pressure_max_radius * bh_mass, &
+        fm_polytropic_constant)
 
     case default
       print *, "CRITICAL ERROR: case_name no valido en initial_conditions."
@@ -347,45 +350,24 @@ contains
     real*8, intent(in)    :: r_in, r_max_dens, K_poly
     integer :: local_nx, local_ny, local_nz
     integer :: i, j, k
-    real*8  :: l_ang, W_in, W_r, enthalpy, ut_sq, r_loc
+    real*8  :: l_ang, W_in, r_loc
     real*8  :: alpha, beta(3), g(3,3)
-    real*8  :: g_tt, g_tphi, Omega, coord_in
-    ! Nuevas variables para el momento angular de Kerr
-    real*8  :: sq_Mr, num, den
+    logical :: model_is_valid, cell_is_torus
 
     local_nx = size(prim_state, 2)
     local_ny = size(prim_state, 3)
     local_nz = size(prim_state, 4)
 
-    ! 1. Transformación del radio para la evaluación correcta en la métrica
-    if (use_log_r) then
-      coord_in = log(r_in)
-    else
-      coord_in = r_in
+    ! La solución física se prepara una sola vez. La dimensionalidad del caso
+    ! queda determinada únicamente por local_ny y local_nz: ny=1 fija el corte
+    ! ecuatorial, nz=1 fija el corte sagital y ambos >1 producen el toro 3D.
+    call prepare_fishbone_moncrief(r_in, r_max_dens, l_ang, W_in, model_is_valid)
+    if (.not. model_is_valid) then
+      write(*,*) 'CRITICAL ERROR: invalid Fishbone-Moncrief model parameters.'
+      error stop 1
     end if
 
-    call calculate_metric(coord_in, pi/2.0d0, alpha=alpha, beta=beta, gamma=g)
-    
-    ! 2. CORRECCIÓN KERR: Momento angular específico Kepleriano dependiente del espín (a)
-    ! Asume que 'a_spin' y 'bh_mass' son accesibles globalmente desde tu módulo de parámetros
-    sq_Mr = sqrt(bh_mass * r_max_dens)
-    num = sq_Mr * (r_max_dens**2 - 2.0d0 * a_spin * sq_Mr + a_spin**2)
-    den = r_max_dens**2 - 2.0d0 * bh_mass * r_max_dens + a_spin * sq_Mr
-    l_ang = num / den
-
-    ! 3. GENERALIZACIÓN MÉTRICA PARA W_in
-    ! g_tt completo: -alpha^2 + gamma_ij * beta^i * beta^j
-    g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2 &
-         + 2.0d0*(g(1,2)*beta(1)*beta(2) + g(1,3)*beta(1)*beta(3) + g(2,3)*beta(2)*beta(3))
-
-    ! g_tphi: gamma_{i phi} * beta^i (asumiendo que phi es el índice 3)
-    g_tphi = g(1,3)*beta(1) + g(2,3)*beta(2) + g(3,3)*beta(3)
-
-    ! Fórmula general para u_t^2 incluyendo el término g_tphi
-    ut_sq = (g_tphi**2 - g_tt * g(3,3)) / (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt)
-    W_in  = 0.5d0 * log(ut_sq)
-
-    !!$OMP PARALLEL DO PRIVATE(i, j, k, r_loc, g_tt, g_tphi, Omega, alpha, beta, g, ut_sq, W_r, enthalpy)
+    !!$OMP PARALLEL DO PRIVATE(i, j, k, r_loc, alpha, beta, g, cell_is_torus)
     do k = 1, local_nz
       do j = 1, local_ny
         do i = 1, local_nx
@@ -401,56 +383,9 @@ contains
           beta(:) = beta_c(:,i,j,k)
           g(:,:) = gamma_c(:,:,i,j,k)
 
-          ! --- GENERALIZACIÓN MÉTRICA LOCAL ---
-          g_tt = -alpha**2 + g(1,1)*beta(1)**2 + g(2,2)*beta(2)**2 + g(3,3)*beta(3)**2 &
-               + 2.0d0*(g(1,2)*beta(1)*beta(2) + g(1,3)*beta(1)*beta(3) + g(2,3)*beta(2)*beta(3))
-
-          g_tphi = g(1,3)*beta(1) + g(2,3)*beta(2) + g(3,3)*beta(3)
-
-          ! Blindaje de frontera interna
-          if (r_loc < r_in) then
-            prim_state(eq_de, i, j, k) = rho_floor
-            prim_state(eq_pr, i, j, k) = p_floor
-            prim_state(eq_vx:eq_vz, i, j, k) = 0.0d0
-            cycle
-          end if
-
-          ! Verificación de causalidad generalizada
-          if (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt > 0.0d0) then
-            ut_sq = (g_tphi**2 - g_tt * g(3,3)) / (g(3,3) + 2.0d0 * l_ang * g_tphi + l_ang**2 * g_tt)
-          else
-            ut_sq = -1.0d0 
-          end if
-          
-          if (ut_sq > 0.0d0) then
-            W_r = 0.5d0 * log(ut_sq)
-            enthalpy = exp(W_in - W_r)
-
-            if (enthalpy > 1.0d0) then
-              ! Gas del Toroide
-              prim_state(eq_de, i, j, k) = ((enthalpy - 1.0d0) * (adb_idx - 1.0d0) / (K_poly * adb_idx))**(1.0d0 / (adb_idx - 1.0d0))
-              prim_state(eq_pr, i, j, k) = K_poly * prim_state(eq_de, i, j, k)**adb_idx
-
-              ! Calcular la velocidad angular generalizada Omega = u^phi / u^t
-              Omega = -(g_tphi + l_ang * g_tt) / (g(3,3) + l_ang * g_tphi)
-
-              ! Velocidades Eulerianas (v^i = u^i / (alpha u^t) + beta^i / alpha)
-              ! Para un flujo circular u^r = u^theta = 0
-              prim_state(eq_vx, i, j, k) = beta(1) / alpha 
-              prim_state(eq_vy, i, j, k) = beta(2) / alpha
-              prim_state(eq_vz, i, j, k) = (Omega + beta(3)) / alpha
-            else
-              ! Vacío exterior (Atmósfera)
-              prim_state(eq_de, i, j, k) = rho_floor
-              prim_state(eq_pr, i, j, k) = p_floor
-              prim_state(eq_vx:eq_vz, i, j, k) = 0.0d0
-            end if
-          else
-            ! Zonas causalmente desconectadas o prohibidas
-            prim_state(eq_de, i, j, k) = rho_floor
-            prim_state(eq_pr, i, j, k) = p_floor
-            prim_state(eq_vx:eq_vz, i, j, k) = 0.0d0
-          end if
+          call evaluate_fishbone_moncrief_state(r_loc, r_in, K_poly, l_ang, W_in, &
+                                                alpha, beta, g, &
+                                                prim_state(:,i,j,k), cell_is_torus)
         end do
       end do
     end do
@@ -460,6 +395,119 @@ contains
     print *, "    Momento Angular (l) =", l_ang, " W_in =", W_in
 
   end subroutine setup_fishbone_moncrief_initial
+
+
+  ! Prepara las dos constantes compartidas por cualquier representación del toro:
+  ! corte ecuatorial, corte sagital o dominio tridimensional completo.
+  subroutine prepare_fishbone_moncrief(r_in, r_max_dens, l_ang, W_in, ok)
+    implicit none
+    real*8, intent(in) :: r_in, r_max_dens
+    real*8, intent(out) :: l_ang, W_in
+    logical, intent(out) :: ok
+    real*8 :: alpha, beta(3), g(3,3)
+    real*8 :: coord_in, sq_Mr, numerator_l, denominator_l
+    real*8 :: g_tt, g_tphi, numerator_ut, denominator_ut, ut_sq
+
+    ok = .false.
+    l_ang = 0.0d0
+    W_in = 0.0d0
+
+    if (bh_mass <= 0.0d0 .or. r_in <= 0.0d0 .or. &
+        r_max_dens <= r_in) return
+
+    sq_Mr = sqrt(bh_mass * r_max_dens)
+    numerator_l = sq_Mr * (r_max_dens**2 - 2.0d0*a_spin*sq_Mr + a_spin**2)
+    denominator_l = r_max_dens**2 - 2.0d0*bh_mass*r_max_dens + a_spin*sq_Mr
+    if (.not. ieee_is_finite(denominator_l) .or. &
+        abs(denominator_l) <= tiny(1.0d0)) return
+    l_ang = numerator_l / denominator_l
+    if (.not. ieee_is_finite(l_ang)) return
+
+    if (use_log_r) then
+      coord_in = log(r_in)
+    else
+      coord_in = r_in
+    end if
+    call calculate_metric(coord_in, pi/2.0d0, alpha=alpha, beta=beta, gamma=g)
+    call fishbone_metric_components(alpha, beta, g, g_tt, g_tphi)
+
+    numerator_ut = g_tphi**2 - g_tt*g(3,3)
+    denominator_ut = g(3,3) + 2.0d0*l_ang*g_tphi + l_ang**2*g_tt
+    if (numerator_ut <= 0.0d0 .or. denominator_ut <= 0.0d0) return
+
+    ut_sq = numerator_ut / denominator_ut
+    if (.not. ieee_is_finite(ut_sq) .or. ut_sq <= 0.0d0) return
+    W_in = 0.5d0 * log(ut_sq)
+    ok = ieee_is_finite(W_in)
+  end subroutine prepare_fishbone_moncrief
+
+
+  ! Evalúa la misma solución analítica en una celda, con independencia de cuántas
+  ! direcciones tenga activas la malla. La métrica se recibe desde la caché para no
+  ! recalcularla durante la inicialización de dominios 3D.
+  subroutine evaluate_fishbone_moncrief_state(r_loc, r_in, K_poly, l_ang, W_in, &
+                                              alpha, beta, g, prim_cell, is_torus)
+    implicit none
+    real*8, intent(in) :: r_loc, r_in, K_poly, l_ang, W_in
+    real*8, intent(in) :: alpha, beta(3), g(3,3)
+    real*8, intent(out) :: prim_cell(:)
+    logical, intent(out) :: is_torus
+    real*8 :: g_tt, g_tphi, numerator_ut, denominator_ut, ut_sq
+    real*8 :: W_r, enthalpy, density, pressure, Omega, omega_denominator
+
+    prim_cell = 0.0d0
+    prim_cell(eq_de) = rho_floor
+    prim_cell(eq_pr) = p_floor
+    is_torus = .false.
+
+    if (r_loc < r_in .or. K_poly <= 0.0d0 .or. alpha <= 0.0d0) return
+
+    call fishbone_metric_components(alpha, beta, g, g_tt, g_tphi)
+    numerator_ut = g_tphi**2 - g_tt*g(3,3)
+    denominator_ut = g(3,3) + 2.0d0*l_ang*g_tphi + l_ang**2*g_tt
+    if (numerator_ut <= 0.0d0 .or. denominator_ut <= 0.0d0) return
+
+    ut_sq = numerator_ut / denominator_ut
+    if (.not. ieee_is_finite(ut_sq) .or. ut_sq <= 0.0d0) return
+    W_r = 0.5d0 * log(ut_sq)
+    enthalpy = exp(W_in - W_r)
+    if (.not. ieee_is_finite(enthalpy) .or. enthalpy <= 1.0d0) return
+
+    density = ((enthalpy - 1.0d0) * (adb_idx - 1.0d0) / &
+               (K_poly * adb_idx))**(1.0d0 / (adb_idx - 1.0d0))
+    pressure = K_poly * density**adb_idx
+    if (.not. ieee_is_finite(density) .or. .not. ieee_is_finite(pressure) .or. &
+        density <= 0.0d0 .or. pressure <= 0.0d0) return
+
+    omega_denominator = g(3,3) + l_ang*g_tphi
+    if (.not. ieee_is_finite(omega_denominator) .or. &
+        abs(omega_denominator) <= tiny(1.0d0)) return
+    Omega = -(g_tphi + l_ang*g_tt) / omega_denominator
+    if (.not. ieee_is_finite(Omega)) return
+
+    prim_cell(eq_de) = density
+    prim_cell(eq_pr) = pressure
+    prim_cell(eq_vx) = beta(1) / alpha
+    prim_cell(eq_vy) = beta(2) / alpha
+    prim_cell(eq_vz) = (Omega + beta(3)) / alpha
+    if (.not. all(ieee_is_finite(prim_cell))) then
+      prim_cell = 0.0d0
+      prim_cell(eq_de) = rho_floor
+      prim_cell(eq_pr) = p_floor
+      return
+    end if
+    is_torus = .true.
+  end subroutine evaluate_fishbone_moncrief_state
+
+
+  subroutine fishbone_metric_components(alpha, beta, g, g_tt, g_tphi)
+    implicit none
+    real*8, intent(in) :: alpha, beta(3), g(3,3)
+    real*8, intent(out) :: g_tt, g_tphi
+
+    g_tt = -alpha**2 + dot_product(beta, matmul(g, beta))
+    g_tphi = dot_product(g(3,:), beta)
+  end subroutine fishbone_metric_components
 
   ! Inicializa de manera portable y reproducible el generador intrínseco.
   subroutine set_reproducible_random_seed(seed_value)
@@ -691,9 +739,10 @@ contains
         do j = -nghost, ny+nghost
           do i = -nghost, nx+nghost
             if (i < 1 .or. i > nx .or. j < 1 .or. j > ny .or. k < 1 .or. k > nz) then
-                q_state(eq_de, i, j, k) = 10.0d0
-                q_state(eq_pr, i, j, k) = 0.01d0
+                q_state(eq_de, i, j, k) = jet_ambient_density
+                q_state(eq_pr, i, j, k) = jet_ambient_pressure
                 q_state(eq_vx:eq_vz, i, j, k) = 0.0d0
+                q_state(eq_vz, i, j, k) = jet_ambient_velocity
             end if
           end do
         end do
@@ -720,11 +769,11 @@ contains
             q_state(:, i, j, nz+g) = q_state(:, i, j, nz)
             q_state(eq_vz, i, j, nz+g) = max(0.0d0, q_state(eq_vz, i, j, nz))
 
-            if (x(i) <= 1.0d0) then
-              q_state(eq_de, i, j, 1-g) = 0.1d0
-              q_state(eq_pr, i, j, 1-g) = 0.01d0
+            if (x(i) <= jet_nozzle_radius) then
+              q_state(eq_de, i, j, 1-g) = jet_density
+              q_state(eq_pr, i, j, 1-g) = jet_pressure
               q_state(eq_vx:eq_vy, i, j, 1-g) = 0.0d0
-              q_state(eq_vz, i, j, 1-g) = 0.99d0
+              q_state(eq_vz, i, j, 1-g) = jet_velocity
             else
               q_state(:, i, j, 1-g) = q_state(:, i, j, g)
               q_state(eq_vz, i, j, 1-g) = -q_state(eq_vz, i, j, g) 

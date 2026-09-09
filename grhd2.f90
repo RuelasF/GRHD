@@ -8,6 +8,7 @@
 ! =======================================================================================
 program grhd2
   use variables
+  use parameters
   use metrics
   use initialization
   use conditions
@@ -20,7 +21,9 @@ program grhd2
   implicit none
 
   real*8 :: start_time, end_time
-  integer :: i, j, rk, k
+  integer :: i, j, rk, k, argument_count, io_status
+  character(len=1024) :: first_argument, parameter_file
+  logical :: check_only
 
   ! ---  VARIABLES PARA EL CRONÓMETRO Y ETA ---
   real*8 :: session_start_time, session_progress
@@ -31,8 +34,28 @@ program grhd2
 
   real*8 :: total_mass
 
+  argument_count = command_argument_count()
+  check_only = .false.
+  first_argument = ''
+  parameter_file = ''
+
+  if (argument_count == 1) then
+    call get_command_argument(1, parameter_file)
+  else if (argument_count == 2) then
+    call get_command_argument(1, first_argument)
+    call get_command_argument(2, parameter_file)
+    if (trim(first_argument) /= '--check') then
+      write(*,*) 'Uso: ./grhd2 [--check] archivo.par'
+      error stop 1
+    end if
+    check_only = .true.
+  else
+    write(*,*) 'Uso: ./grhd2 [--check] archivo.par'
+    error stop 1
+  end if
+
+  call read_parameter_header(trim(parameter_file))
   start_time = omp_get_wtime()
-  call apply_startup_overrides()
 
   ! =========================================================================
   ! 1. ARRANQUE DEL SISTEMA (Cold Start vs Checkpoint Restart)
@@ -43,9 +66,20 @@ program grhd2
     print *, '>>> Archivo: ', trim(restart_file)
     print *, '=========================================='
     
-    open(20, file=trim(restart_file), status='old', form='unformatted')
+    open(20, file=trim(restart_file), status='old', form='unformatted', iostat=io_status)
+    if (io_status /= 0) then
+      write(*,*) 'ERROR: no se pudo abrir el checkpoint: ', trim(restart_file)
+      error stop 1
+    end if
     call read_checkpoint_metadata(20)
-    call apply_control_overrides()
+    call read_parameter_file(trim(parameter_file), .true.)
+    call validate_parameters(trim(parameter_file))
+    call print_parameter_summary(trim(parameter_file))
+    if (check_only) then
+      close(20)
+      print *, 'Archivo de parametros y checkpoint validos; no se inicio la simulacion.'
+      stop
+    end if
 
     ! Recalculamos parámetros termodinámicos auxiliares
     g1 = adb_idx / (adb_idx - 1.0d0)
@@ -79,8 +113,10 @@ program grhd2
     next_checkpoint = (int(integration_time / checkpoint_interval) + 1.0d0) * checkpoint_interval
   else
     ! --- ARRANQUE EN FRÍO NORMAL (T=0) ---
+    integration_time = 0.0d0
+    call initialize_problem(trim(parameter_file), check_only)
+    if (check_only) stop
     next_checkpoint = checkpoint_interval
-    call initialize_problem()
 
     ! Llenado inicial del vector de conservativas
     !$OMP PARALLEL DO PRIVATE(i, j, k)
@@ -109,7 +145,11 @@ program grhd2
   call update_adaptive_dt() ! Inicialización del primer dt
 
   session_start_time = integration_time
-  last_percent = int((integration_time / final_time) * 100.0d0)
+  if (final_time > 0.0d0) then
+    last_percent = int((integration_time / final_time) * 100.0d0)
+  else
+    last_percent = 100
+  end if
 
     total_mass = 0.0d0
     

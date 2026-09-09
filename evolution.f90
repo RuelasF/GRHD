@@ -14,6 +14,7 @@ module evolution
   use reconstruction
   use fluxes
   use equations
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
   private
   public :: calc_rhs, update_adaptive_dt
@@ -105,14 +106,23 @@ contains
           ! B. Reconstrucción
           call reconstruct_1d_core(prim_1d, ny, q_L_strip, q_R_strip, DIR_Y)
 
-          ! C. Cálculo de Flujos (las interfaces caen en los bordes de celda en theta)
+          ! C. Cálculo de Flujos (las interfaces caen en los bordes de celda en theta).
+          ! En coordenadas esféricas las caras theta=0,pi tienen área física nula:
+          ! el flujo densitizado sqrt(gamma) F^theta es exactamente cero. No se debe
+          ! llamar al solver de Riemann allí porque gamma_ij es degenerada en el eje.
           do j = 0, ny
-            a    = alpha_f_y(i, j+1, k)
-            b(:) = beta_f_y(:, i, j+1, k)
-            g(:,:) = gamma_f_y(:, :, i, j+1, k)
-            sqg  = sqrt_gamma_f_y(i, j+1, k)
-            
-            call resolve_riemann_problem(q_L_strip(:,j), q_R_strip(:,j), DIR_Y, a, b, g, sqg, flux_strip(:,j))
+            if (trim(geom_type) == 'Spherical' .and. &
+                abs(sin(y_face(j))) <= 64.0d0*epsilon(1.0d0)) then
+              flux_strip(:,j) = 0.0d0
+            else
+              a      = alpha_f_y(i, j+1, k)
+              b(:)   = beta_f_y(:, i, j+1, k)
+              g(:,:) = gamma_f_y(:, :, i, j+1, k)
+              sqg    = sqrt_gamma_f_y(i, j+1, k)
+
+              call resolve_riemann_problem(q_L_strip(:,j), q_R_strip(:,j), &
+                                           DIR_Y, a, b, g, sqg, flux_strip(:,j))
+            end if
           end do
 
           ! D. Acumulación de Flujos Y en el RHS
@@ -181,17 +191,26 @@ contains
     use variables
     implicit none
     
-    real*8 :: max_vx, max_vy, max_vz
+    real*8 :: max_vx, max_vy, max_vz, inverse_dt
     real*8 :: local_vx, local_vy, local_vz, alpha, beta(3), ginv(3,3)
-    integer :: i, j, k
-    
-    max_vx = 1.0d-10
-    max_vy = 1.0d-10
-    max_vz = 1.0d-10
+    integer :: i, j, k, invalid_cfl_cells
 
-    ! Buscamos las velocidades máximas
+    max_vx = 0.0d0
+    max_vy = 0.0d0
+    max_vz = 0.0d0
+    invalid_cfl_cells = 0
+
+    if (.not. ieee_is_finite(dx) .or. dx <= 0.0d0 .or. &
+        (ny > 1 .and. (.not. ieee_is_finite(dy) .or. dy <= 0.0d0)) .or. &
+        (nz > 1 .and. (.not. ieee_is_finite(dz) .or. dz <= 0.0d0))) then
+      write(*,*) 'CRITICAL ERROR: invalid grid spacing in multidimensional CFL condition.'
+      error stop 1
+    end if
+
+    ! Cotas causales máximas en cada dirección. El cono de luz es una cota
+    ! segura tanto para GRHD como para las futuras ondas rápidas de GRMHD.
     !$OMP PARALLEL DO PRIVATE(i, j, k, alpha, beta, ginv, local_vx, local_vy, local_vz) &
-    !$OMP REDUCTION(max:max_vx, max_vy, max_vz) COLLAPSE(3)
+    !$OMP REDUCTION(max:max_vx, max_vy, max_vz) REDUCTION(+:invalid_cfl_cells) COLLAPSE(3)
     do k = 1, nz
       do j = 1, ny
         do i = 1, nx
@@ -200,32 +219,51 @@ contains
           alpha    = alpha_c(i,j,k)
           beta(:)  = beta_c(:,i,j,k)
           ginv(:,:) = gamma_inv_c(:,:,i,j,k) ! gamma^ij
-          
+
+          if (.not. ieee_is_finite(alpha) .or. alpha <= 0.0d0 .or. &
+              .not. all(ieee_is_finite(beta)) .or. &
+              .not. ieee_is_finite(ginv(1,1)) .or. ginv(1,1) <= 0.0d0 .or. &
+              (ny > 1 .and. (.not. ieee_is_finite(ginv(2,2)) .or. ginv(2,2) <= 0.0d0)) .or. &
+              (nz > 1 .and. (.not. ieee_is_finite(ginv(3,3)) .or. ginv(3,3) <= 0.0d0))) then
+            invalid_cfl_cells = invalid_cfl_cells + 1
+            cycle
+          end if
+
           ! Límite Causal Absoluto Físico (Cono de Luz Coordenado: ds^2 = 0)
           ! La velocidad coordenada de la luz en Kerr usa el componente gamma^ii
           local_vx = alpha * sqrt(ginv(1,1)) + abs(beta(1))
-          local_vy = alpha * sqrt(ginv(2,2)) + abs(beta(2))
-          local_vz = alpha * sqrt(ginv(3,3)) + abs(beta(3))
-          
           max_vx = max(max_vx, local_vx)
-          max_vy = max(max_vy, local_vy)
-          max_vz = max(max_vz, local_vz)
+          if (ny > 1) then
+            local_vy = alpha * sqrt(ginv(2,2)) + abs(beta(2))
+            max_vy = max(max_vy, local_vy)
+          end if
+          if (nz > 1) then
+            local_vz = alpha * sqrt(ginv(3,3)) + abs(beta(3))
+            max_vz = max(max_vz, local_vz)
+          end if
         end do
       end do
     end do
     !$OMP END PARALLEL DO
 
-    ! Aplicamos la condición Courant-Friedrichs-Lewy (CFL) evaluando las 3 dimensiones
-    if (ny > 1 .and. nz > 1) then
-      dt = CFL * min(min(dx / max_vx, dy / max_vy), dz / max_vz)
-    else if (ny > 1) then
-      dt = CFL * min(dx / max_vx, dy / max_vy)
-    else if (nz > 1) then
-      dt = CFL * min(dx / max_vx, dz / max_vz)
-    else
-      dt = CFL * (dx / max_vx)
+    if (invalid_cfl_cells > 0) then
+      write(*,*) 'CRITICAL ERROR: invalid metric data in CFL cells: ', invalid_cfl_cells
+      error stop 1
     end if
-    
+
+    ! Para un operador multidimensional, las contribuciones de estabilidad se
+    ! suman. Usar min(dx/lambda_i) sólo aplica la restricción unidimensional y
+    ! sobreestima dt por hasta el número de direcciones activas.
+    inverse_dt = max_vx / dx
+    if (ny > 1) inverse_dt = inverse_dt + max_vy / dy
+    if (nz > 1) inverse_dt = inverse_dt + max_vz / dz
+
+    if (.not. ieee_is_finite(inverse_dt) .or. inverse_dt <= 0.0d0) then
+      write(*,*) 'CRITICAL ERROR: invalid multidimensional CFL propagation rate.'
+      error stop 1
+    end if
+    dt = CFL / inverse_dt
+
   end subroutine update_adaptive_dt
 
 end module evolution

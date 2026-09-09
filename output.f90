@@ -19,7 +19,8 @@ module output
   public :: save_vtk_at_time, save_checkpoint, read_checkpoint_metadata, &
             read_checkpoint_state, calc_gw_strain, calc_m_dot, calc_convergence_norms, &
             initialize_auxiliary_output, calc_ppi_modes, calc_global_diagnostics, &
-            write_perturbation_event, finn_evans_cell_stress
+            write_perturbation_event, finn_evans_cell_stress, gw_cartesian_kinematics, &
+            kerr_schild_spheroidal_position
 
   ! La extracción Finn--Evans es un proxy de campo débil evaluado sobre el
   ! fluido GRHD. La distancia está expresada en las unidades geométricas del
@@ -58,6 +59,11 @@ contains
     write(unit_file, '(A,A)') 'case=', trim(case_name)
     write(unit_file, '(A,A)') 'metric=', trim(metric_type)
     write(unit_file, '(A,A)') 'geometry=', trim(geom_type)
+    if (vtk_mapping_id == VTK_MAP_PHYSICAL) then
+      write(unit_file, '(A)') 'vtk_mapping=physical'
+    else
+      write(unit_file, '(A)') 'vtk_mapping=untwisted'
+    end if
     write(unit_file, '(A,ES24.16E3)') 'bh_mass=', bh_mass
     write(unit_file, '(A,ES24.16E3)') 'a_spin=', a_spin
     if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
@@ -140,36 +146,48 @@ contains
   end subroutine initialize_auxiliary_output
 
   ! ===================================================================================
-  ! 1. EXPORTADOR VTK (VisIt/ParaView) - FORMATO BINARIO ESTRUCTURADO
+  ! 1. EXPORTADOR VTK (VisIt/ParaView) - FORMATO BINARIO
   ! ===================================================================================
   subroutine save_vtk_data(file_name)
     character(len=*), intent(in) :: file_name
-    integer :: eq, i, j, k, j_src, k_src, unit_file, io_status
-    integer :: ny_vtk, nz_vtk
+    integer :: i, j, k, unit_file, io_status
+    integer :: nx_points, ny_points, nz_points, n_points
     character(len=150) :: full_path
     character(len=100) :: header_line
-    real*8 :: th_val  ! Variable para forzar el cierre topológico
-
     real*8, allocatable :: pts_buffer(:,:,:,:)
-    real*8, allocatable :: var_buffer(:,:,:)
-    real*8 :: r_phys
+    real*8 :: r_phys, theta_point, phi_point
+    real*8 :: geometry_spin, cartesian_position(3)
+    real*8 :: topology_tolerance
+    logical :: use_polar_unstructured_grid
 
-    ! -------------------------------------------------------------
-    ! LÓGICA DE CIERRES TOPOLÓGICOS (Cierre Azimutal y Polar)
-    ! -------------------------------------------------------------
-    ny_vtk = ny
-    nz_vtk = nz
+    geometry_spin = 0.0d0
+    if (trim(metric_type) == 'Kerr-Schild') geometry_spin = a_spin
 
-    select case(trim(geom_type))
-      case('Spherical')
-        ! Cierre Azimutal (phi): Cierra el "hueco de pizza"
-        if (nz > 1) nz_vtk = nz + 1
-        ! Cierre Polar (theta): Cierra el "eje blanco" en los polos
-        if (ny > 1) ny_vtk = ny + 2
-      case('Cylindrical')
-        ! Cierre Azimutal cilíndrico (aquí phi es el eje y)
-        if (ny > 1) ny_vtk = ny + 1
-    end select
+    ! Una esfera completa no puede representarse con hexaedros estructurados
+    ! regulares en los polos: allí distintos índices azimutales ocupan el mismo
+    ! punto y VisIt puede producir nudos al cortar esas celdas degeneradas.
+    topology_tolerance = 128.0d0 * epsilon(1.0d0)
+    use_polar_unstructured_grid = trim(geom_type) == 'Spherical' .and. &
+      ny > 1 .and. nz > 1 .and. &
+      abs(y_face(0)) <= topology_tolerance .and. &
+      abs(y_face(ny) - pi) <= topology_tolerance * max(1.0d0, abs(pi)) .and. &
+      abs((z_face(nz) - z_face(0)) - 2.0d0*pi) <= &
+        topology_tolerance * max(1.0d0, abs(2.0d0*pi))
+
+    if (use_polar_unstructured_grid) then
+      call save_vtk_spherical_unstructured(file_name, geometry_spin)
+      return
+    end if
+
+    ! Las variables hidrodinámicas viven en celdas. La malla VTK se construye
+    ! con sus caras verdaderas para que cada celda numérica corresponda a una
+    ! celda geométrica y los polos no se formen con anillos artificiales.
+    nx_points = nx + 1
+    ny_points = 1
+    nz_points = 1
+    if (ny > 1) ny_points = ny + 1
+    if (nz > 1) nz_points = nz + 1
+    n_points = nx_points * ny_points * nz_points
 
     full_path = trim(output_folder) //  '/' // trim(scheme_name) // '/' // trim(file_name)
     print *, '>>> Guardando frame VTK Binario: ', trim(full_path)
@@ -186,66 +204,54 @@ contains
     write(unit_file) 'BINARY' // char(10)   
     write(unit_file) 'DATASET STRUCTURED_GRID' // char(10)
 
-    write(header_line, '(a, i0, 1x, i0, 1x, i0)') 'DIMENSIONS ', nx, ny_vtk, nz_vtk
+    write(header_line, '(a, i0, 1x, i0, 1x, i0)') &
+      'DIMENSIONS ', nx_points, ny_points, nz_points
     write(unit_file) trim(header_line) // char(10)
 
-    write(header_line, '(a, i0, a)') 'POINTS ', nx * ny_vtk * nz_vtk, ' double'
+    write(header_line, '(a, i0, a)') 'POINTS ', n_points, ' double'
     write(unit_file) trim(header_line) // char(10)
 
-    allocate(pts_buffer(3, 1:nx, 1:ny_vtk, 1:nz_vtk))
+    allocate(pts_buffer(3, 1:nx_points, 1:ny_points, 1:nz_points))
     
     ! -------------------------------------------------------------
     ! BUCLE DE MAPEO GEOMÉTRICO 3D (X, Y, Z)
     ! -------------------------------------------------------------
-    do k = 1, nz_vtk
-      k_src = k
-      if (k == nz_vtk .and. nz_vtk > nz) k_src = 1
-      
-      do j = 1, ny_vtk
-        
-        ! Inyección de los polos falsos para el renderizado continuo
-        if (trim(geom_type) == 'Spherical' .and. ny > 1) then
-          if (j == 1) then
-            th_val = 0.0d0           ! Forzamos Polo Norte exacto
-            j_src = 1                ! Copiamos gas de la primera celda
-          else if (j == ny_vtk) then
-            th_val = pi              ! Forzamos Polo Sur exacto
-            j_src = ny               ! Copiamos gas de la última celda
-          else
-            th_val = y(j - 1)        ! Coordenadas reales desplazadas por el polo norte
-            j_src = j - 1
-          end if
+    do k = 1, nz_points
+      if (nz > 1) then
+        phi_point = z_face(k - 1)
+      else
+        phi_point = z(1)
+      end if
+
+      do j = 1, ny_points
+        if (ny > 1) then
+          theta_point = y_face(j - 1)
         else
-          ! Lógica Cilíndrica o Cartesiana
-          j_src = j
-          if (j == ny_vtk .and. ny_vtk > ny) j_src = 1
-          th_val = y(j_src)
+          theta_point = y(1)
         end if
-        
-        do i = 1, nx
-          ! Corrección: Actualización a use_log_r
+
+        do i = 1, nx_points
           if (use_log_r) then
-            r_phys = exp(x(i)) 
+            r_phys = exp(x_face(i - 1))
           else
-            r_phys = x(i) 
+            r_phys = x_face(i - 1)
           end if
 
           select case(trim(geom_type))
             case('Spherical')
-              ! Mapeo Esférico usando th_val en lugar de y(j)
-              pts_buffer(1, i, j, k) = r_phys * sin(th_val) * cos(z(k_src))
-              pts_buffer(2, i, j, k) = r_phys * sin(th_val) * sin(z(k_src))
-              pts_buffer(3, i, j, k) = r_phys * cos(th_val)
-              
+              call vtk_spherical_position(r_phys, theta_point, phi_point, &
+                                           geometry_spin, cartesian_position)
+              pts_buffer(:, i, j, k) = cartesian_position
+
             case('Cylindrical')
-              pts_buffer(1, i, j, k) = r_phys * cos(th_val)
-              pts_buffer(2, i, j, k) = r_phys * sin(th_val)
-              pts_buffer(3, i, j, k) = z(k_src)
-              
+              pts_buffer(1, i, j, k) = r_phys * cos(theta_point)
+              pts_buffer(2, i, j, k) = r_phys * sin(theta_point)
+              pts_buffer(3, i, j, k) = phi_point
+
             case default
               pts_buffer(1, i, j, k) = r_phys
-              pts_buffer(2, i, j, k) = th_val
-              pts_buffer(3, i, j, k) = z(k_src)
+              pts_buffer(2, i, j, k) = theta_point
+              pts_buffer(3, i, j, k) = phi_point
           end select
         end do
       end do
@@ -255,120 +261,193 @@ contains
     write(unit_file) char(10) 
     deallocate(pts_buffer)
 
-    write(header_line, '(a, i0)') 'POINT_DATA ', nx * ny_vtk * nz_vtk
-    write(unit_file) trim(header_line) // char(10)
+    call write_vtk_cell_data(unit_file)
+    close(unit_file)
+  end subroutine save_vtk_data
 
-    allocate(var_buffer(1:nx, 1:ny_vtk, 1:nz_vtk))
-    
-    ! -------------------------------------------------------------
-    ! EXPORTACIÓN DE VARIABLES PRIMITIVAS
-    ! -------------------------------------------------------------
+
+  subroutine save_vtk_spherical_unstructured(file_name, geometry_spin)
+    character(len=*), intent(in) :: file_name
+    real*8, intent(in) :: geometry_spin
+    integer :: i, j, k, k_next, point_id, cell_id, offset
+    integer :: unit_file, io_status, n_points, n_cells, cell_list_size
+    integer(kind=4), allocatable :: ring_id(:,:,:), north_id(:), south_id(:)
+    integer(kind=4), allocatable :: cell_buffer(:), cell_types(:)
+    real*8, allocatable :: point_buffer(:,:)
+    real*8 :: r_phys, position(3)
+    character(len=150) :: full_path
+    character(len=100) :: header_line
+
+    ! Hay nz puntos por anillo: la conectividad periódica une el último con el
+    ! primero. Cada cara radial tiene un único punto norte y uno sur.
+    n_points = (nx + 1) * ((ny - 1) * nz + 2)
+    n_cells = nx * ny * nz
+    cell_list_size = nx * nz * (9 * ny - 4)
+
+    allocate(point_buffer(3, n_points))
+    allocate(ring_id(0:nx, 1:ny-1, 0:nz-1))
+    allocate(north_id(0:nx), south_id(0:nx))
+
+    point_id = 0
+    do i = 0, nx
+      if (use_log_r) then
+        r_phys = exp(x_face(i))
+      else
+        r_phys = x_face(i)
+      end if
+
+      north_id(i) = point_id
+      call vtk_spherical_position(r_phys, 0.0d0, z_face(0), geometry_spin, position)
+      point_buffer(:, point_id + 1) = position
+      point_id = point_id + 1
+
+      do k = 0, nz - 1
+        do j = 1, ny - 1
+          ring_id(i, j, k) = point_id
+          call vtk_spherical_position(r_phys, y_face(j), z_face(k), &
+                                      geometry_spin, position)
+          point_buffer(:, point_id + 1) = position
+          point_id = point_id + 1
+        end do
+      end do
+
+      south_id(i) = point_id
+      call vtk_spherical_position(r_phys, pi, z_face(0), geometry_spin, position)
+      point_buffer(:, point_id + 1) = position
+      point_id = point_id + 1
+    end do
+
+    if (point_id /= n_points) error stop 'Internal VTK point-count mismatch.'
+
+    allocate(cell_buffer(cell_list_size), cell_types(n_cells))
+    offset = 1
+    cell_id = 0
+    do k = 0, nz - 1
+      k_next = mod(k + 1, nz)
+      do j = 1, ny
+        do i = 0, nx - 1
+          cell_id = cell_id + 1
+          if (j == 1) then
+            ! Prisma polar norte: caras triangulares a radio constante.
+            cell_buffer(offset:offset+6) = [6, north_id(i), &
+              ring_id(i, 1, k), ring_id(i, 1, k_next), north_id(i+1), &
+              ring_id(i+1, 1, k), ring_id(i+1, 1, k_next)]
+            cell_types(cell_id) = 13       ! VTK_WEDGE
+            offset = offset + 7
+          else if (j == ny) then
+            ! En el polo sur se invierte el orden azimutal para conservar la
+            ! orientación de la celda.
+            cell_buffer(offset:offset+6) = [6, south_id(i), &
+              ring_id(i, ny-1, k_next), ring_id(i, ny-1, k), south_id(i+1), &
+              ring_id(i+1, ny-1, k_next), ring_id(i+1, ny-1, k)]
+            cell_types(cell_id) = 13       ! VTK_WEDGE
+            offset = offset + 7
+          else
+            cell_buffer(offset:offset+8) = [8, ring_id(i, j-1, k), &
+              ring_id(i+1, j-1, k), ring_id(i+1, j, k), ring_id(i, j, k), &
+              ring_id(i, j-1, k_next), ring_id(i+1, j-1, k_next), &
+              ring_id(i+1, j, k_next), ring_id(i, j, k_next)]
+            cell_types(cell_id) = 12       ! VTK_HEXAHEDRON
+            offset = offset + 9
+          end if
+        end do
+      end do
+    end do
+
+    if (cell_id /= n_cells .or. offset - 1 /= cell_list_size) then
+      error stop 'Internal VTK cell-count mismatch.'
+    end if
+
+    full_path = trim(output_folder) // '/' // trim(scheme_name) // '/' // trim(file_name)
+    print *, '>>> Guardando frame VTK Binario: ', trim(full_path)
+    unit_file = 10
+    open(unit_file, file=full_path, status='replace', access='stream', &
+         form='unformatted', convert='big_endian', iostat=io_status)
+    if (io_status /= 0) then
+      print *, 'CRITICAL ERROR: No se pudo crear el archivo VTK: ', trim(full_path)
+      return
+    end if
+
+    write(unit_file) '# vtk DataFile Version 3.0' // char(10)
+    write(unit_file) 'GRHD Simulation Data' // char(10)
+    write(unit_file) 'BINARY' // char(10)
+    write(unit_file) 'DATASET UNSTRUCTURED_GRID' // char(10)
+    write(header_line, '(a, i0, a)') 'POINTS ', n_points, ' double'
+    write(unit_file) trim(header_line) // char(10)
+    write(unit_file) point_buffer
+    write(unit_file) char(10)
+
+    write(header_line, '(a, i0, 1x, i0)') 'CELLS ', n_cells, cell_list_size
+    write(unit_file) trim(header_line) // char(10)
+    write(unit_file) cell_buffer
+    write(unit_file) char(10)
+    write(header_line, '(a, i0)') 'CELL_TYPES ', n_cells
+    write(unit_file) trim(header_line) // char(10)
+    write(unit_file) cell_types
+    write(unit_file) char(10)
+
+    call write_vtk_cell_data(unit_file)
+    close(unit_file)
+    deallocate(point_buffer, ring_id, north_id, south_id, cell_buffer, cell_types)
+  end subroutine save_vtk_spherical_unstructured
+
+
+  subroutine write_vtk_cell_data(unit_file)
+    integer, intent(in) :: unit_file
+    integer :: eq, i, j, k, n_cells
+    character(len=100) :: header_line
+    real*8, allocatable :: var_buffer(:,:,:)
+
+    n_cells = nx * ny * nz
+    write(header_line, '(a, i0)') 'CELL_DATA ', n_cells
+    write(unit_file) trim(header_line) // char(10)
+    allocate(var_buffer(1:nx, 1:ny, 1:nz))
+
     do eq = 1, neq
       write(header_line, '(a, 1x, a, a)') 'SCALARS', trim(var_names(eq)), ' double 1'
       write(unit_file) trim(header_line) // char(10)
       write(unit_file) 'LOOKUP_TABLE default' // char(10)
-      
-      do k = 1, nz_vtk
-        k_src = k
-        if (k == nz_vtk .and. nz_vtk > nz) k_src = 1
-        
-        do j = 1, ny_vtk
-          ! Replicamos la misma lógica de j_src para la extracción de datos
-          if (trim(geom_type) == 'Spherical' .and. ny > 1) then
-            if (j == 1) then
-              j_src = 1
-            else if (j == ny_vtk) then
-              j_src = ny
-            else
-              j_src = j - 1
-            end if
-          else
-            j_src = j
-            if (j == ny_vtk .and. ny_vtk > ny) j_src = 1
-          end if
-          
+      do k = 1, nz
+        do j = 1, ny
           do i = 1, nx
-            ! Extracción del dato crudo lógico
-            var_buffer(i, j, k) = p(eq, i, j_src, k_src)
-            
-            ! SANEAMIENTO VISUAL: Conversión de velocidad lógica a física (v^r = v^x * r)
-            ! Corrección: Actualización a use_log_r
+            var_buffer(i, j, k) = p(eq, i, j, k)
             if (use_log_r .and. eq == eq_vx) then
-               var_buffer(i, j, k) = var_buffer(i, j, k) * exp(x(i))
+              var_buffer(i, j, k) = var_buffer(i, j, k) * exp(x(i))
             end if
           end do
         end do
       end do
-      
       write(unit_file) var_buffer
       write(unit_file) char(10)
     end do
 
-    ! -------------------------------------------------------------
-    ! EXPORTACIÓN DE MÉTRICA PARA DIAGNÓSTICO
-    ! -------------------------------------------------------------
-    
-    ! 1. Lapso Temporal (Alpha)
-    write(header_line, '(a)') 'SCALARS Lapse_alpha double 1'
-    write(unit_file) trim(header_line) // char(10)
+    write(unit_file) 'SCALARS Lapse_alpha double 1' // char(10)
     write(unit_file) 'LOOKUP_TABLE default' // char(10)
-
-    do k = 1, nz_vtk
-      k_src = k
-      if (k == nz_vtk .and. nz_vtk > nz) k_src = 1
-      do j = 1, ny_vtk
-        if (trim(geom_type) == 'Spherical' .and. ny > 1) then
-          if (j == 1) then
-            j_src = 1
-          else if (j == ny_vtk) then
-            j_src = ny
-          else
-            j_src = j - 1
-          end if
-        else
-          j_src = j
-          if (j == ny_vtk .and. ny_vtk > ny) j_src = 1
-        end if
+    do k = 1, nz
+      do j = 1, ny
         do i = 1, nx
-          var_buffer(i, j, k) = alpha_c(i, j_src, k_src)
+          var_buffer(i, j, k) = alpha_c(i, j, k)
         end do
       end do
     end do
     write(unit_file) var_buffer
     write(unit_file) char(10)
 
-    ! 2. Shift Radial (Beta^r)
-    write(header_line, '(a)') 'SCALARS Shift_beta_r double 1'
-    write(unit_file) trim(header_line) // char(10)
+    write(unit_file) 'SCALARS Shift_beta_r double 1' // char(10)
     write(unit_file) 'LOOKUP_TABLE default' // char(10)
-
-    do k = 1, nz_vtk
-      k_src = k
-      if (k == nz_vtk .and. nz_vtk > nz) k_src = 1
-      do j = 1, ny_vtk
-        if (trim(geom_type) == 'Spherical' .and. ny > 1) then
-          if (j == 1) then
-            j_src = 1
-          else if (j == ny_vtk) then
-            j_src = ny
-          else
-            j_src = j - 1
-          end if
-        else
-          j_src = j
-          if (j == ny_vtk .and. ny_vtk > ny) j_src = 1
-        end if
+    do k = 1, nz
+      do j = 1, ny
         do i = 1, nx
-          var_buffer(i, j, k) = beta_c(1, i, j_src, k_src)
+          var_buffer(i, j, k) = beta_c(1, i, j, k)
+          if (use_log_r) var_buffer(i, j, k) = var_buffer(i, j, k) * exp(x(i))
         end do
       end do
     end do
     write(unit_file) var_buffer
     write(unit_file) char(10)
-    
+
     deallocate(var_buffer)
-    close(unit_file)
-  end subroutine save_vtk_data
+  end subroutine write_vtk_cell_data
 
 
   subroutine save_vtk_at_time(current_time)
@@ -512,6 +591,100 @@ contains
   ! 3. EXTRACCIÓN DE OBSERVABLES FÍSICOS (Física de Agujeros Negros)
   ! ===================================================================================
 
+  pure subroutine kerr_schild_spheroidal_position(r_phys, theta, phi, spin, position)
+    real*8, intent(in) :: r_phys, theta, phi, spin
+    real*8, intent(out) :: position(3)
+    real*8 :: sin_theta, cos_theta, sin_phi, cos_phi
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+
+    ! sin(pi) no es exactamente cero en punto flotante. En Kerr-Schild ese
+    ! residuo genera un anillo diminuto cuya orientación depende de r y spin;
+    ! VisIt puede mostrarlo como un nudo en el polo. Colapsamos ambos ejes de
+    ! coordenadas de manera exacta.
+    if (abs(sin_theta) <= 64.0d0 * epsilon(1.0d0)) then
+      position(1) = 0.0d0
+      position(2) = 0.0d0
+      position(3) = sign(r_phys, cos_theta)
+      return
+    end if
+
+    sin_phi = sin(phi)
+    cos_phi = cos(phi)
+
+    position(1) = (r_phys*cos_phi - spin*sin_phi) * sin_theta
+    position(2) = (r_phys*sin_phi + spin*cos_phi) * sin_theta
+    position(3) = r_phys*cos_theta
+  end subroutine kerr_schild_spheroidal_position
+
+
+  subroutine vtk_spherical_position(r_phys, theta, phi, spin, position)
+    real*8, intent(in) :: r_phys, theta, phi, spin
+    real*8, intent(out) :: position(3)
+    real*8 :: sin_theta, cos_theta, cylindrical_radius
+
+    if (vtk_mapping_id == VTK_MAP_PHYSICAL) then
+      call kerr_schild_spheroidal_position(r_phys, theta, phi, spin, position)
+      return
+    end if
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    if (abs(sin_theta) <= 64.0d0 * epsilon(1.0d0)) then
+      position = [0.0d0, 0.0d0, sign(r_phys, cos_theta)]
+      return
+    end if
+
+    ! Visualizacion oblata sin la rotacion radial atan(a/r). Conserva las
+    ! superficies r=constante y colapsa exactamente ambos polos, pero no cambia
+    ! las coordenadas ni los datos usados durante la evolucion.
+    cylindrical_radius = sqrt(r_phys**2 + spin**2) * sin_theta
+    position(1) = cylindrical_radius * cos(phi)
+    position(2) = cylindrical_radius * sin(phi)
+    position(3) = r_phys * cos_theta
+  end subroutine vtk_spherical_position
+
+  pure subroutine gw_cartesian_kinematics(r_phys, theta, phi, spin, alpha, beta, &
+                                          eulerian_velocity, logarithmic_r, &
+                                          position, velocity, flat_jacobian)
+    real*8, intent(in) :: r_phys, theta, phi, spin, alpha
+    real*8, intent(in) :: beta(3), eulerian_velocity(3)
+    logical, intent(in) :: logarithmic_r
+    real*8, intent(out) :: position(3), velocity(3), flat_jacobian
+    real*8 :: coordinate_rates(3)
+    real*8 :: sin_theta, cos_theta, sin_phi, cos_phi, sigma
+    real*8 :: r_dot, theta_dot, phi_dot
+
+    ! Las primitivas son velocidades eulerianas. Finn--Evans necesita las
+    ! tasas coordenadas para construir velocidades cartesianas.
+    coordinate_rates = alpha * eulerian_velocity - beta
+    if (logarithmic_r) coordinate_rates(1) = r_phys * coordinate_rates(1)
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    sin_phi = sin(phi)
+    cos_phi = cos(phi)
+    r_dot = coordinate_rates(1)
+    theta_dot = coordinate_rates(2)
+    phi_dot = coordinate_rates(3)
+
+    ! Para spin=0 se recupera la transformación esférica usada por EF.
+    call kerr_schild_spheroidal_position(r_phys, theta, phi, spin, position)
+
+    velocity(1) = r_dot * cos_phi * sin_theta &
+                + theta_dot * (r_phys * cos_phi - spin * sin_phi) * cos_theta &
+                - phi_dot * (r_phys * sin_phi + spin * cos_phi) * sin_theta
+    velocity(2) = r_dot * sin_phi * sin_theta &
+                + theta_dot * (r_phys * sin_phi + spin * cos_phi) * cos_theta &
+                + phi_dot * (r_phys * cos_phi - spin * sin_phi) * sin_theta
+    velocity(3) = r_dot * cos_theta - r_phys * theta_dot * sin_theta
+
+    sigma = r_phys**2 + spin**2 * cos_theta**2
+    flat_jacobian = sigma * sin_theta
+  end subroutine gw_cartesian_kinematics
+
+
   pure subroutine finn_evans_cell_stress(rho, pressure, central_mass_radius3, &
                                          position, velocity, cell_volume, &
                                          Ixx_cell, Iyy_cell, Ixy_cell)
@@ -533,7 +706,7 @@ contains
     real*8 :: Ixx_ddot, Iyy_ddot, Ixy_ddot
     real*8 :: r, th, phi, rho, pres, dV, mass_radius3
     real*8 :: h_plus, h_cross
-    real*8 :: alpha, beta(3), eulerian_velocity(3), coordinate_rates(3)
+    real*8 :: alpha, beta(3), eulerian_velocity(3)
     real*8 :: position(3), cartesian_velocity(3), flat_jacobian
     real*8 :: cartesian_radius2, radial_grid_jacobian
     real*8 :: horizon_radius, geometry_spin
@@ -552,7 +725,7 @@ contains
     Ixy_ddot = 0.0d0
 
     !$OMP PARALLEL DO PRIVATE(i, j, k, r, th, phi, rho, pres, dV, mass_radius3, &
-    !$OMP alpha, beta, eulerian_velocity, coordinate_rates, position, &
+    !$OMP alpha, beta, eulerian_velocity, position, &
     !$OMP cartesian_velocity, flat_jacobian, cartesian_radius2, radial_grid_jacobian) &
     !$OMP PRIVATE(Ixx_cell, Iyy_cell, Ixy_cell) &
     !$OMP REDUCTION(+:Ixx_ddot, Iyy_ddot, Ixy_ddot)
@@ -585,11 +758,9 @@ contains
           alpha = alpha_c(i,j,k)
           beta = beta_c(:,i,j,k)
           eulerian_velocity = p(eq_vx:eq_vz, i, j, k)
-          call eulerian_to_coordinate_rates(r, alpha, beta, eulerian_velocity, &
-                                             use_log_r, coordinate_rates)
-          call ks_spherical_to_cartesian(r, th, phi, geometry_spin, &
-                                         coordinate_rates, position, &
-                                         cartesian_velocity, flat_jacobian)
+          call gw_cartesian_kinematics(r, th, phi, geometry_spin, alpha, beta, &
+                                       eulerian_velocity, use_log_r, position, &
+                                       cartesian_velocity, flat_jacobian)
 
           ! d^3X usa el Jacobiano cartesiano plano de las coordenadas KS,
           ! tal como requiere la aproximación cuadrupolar de campo débil.
@@ -827,11 +998,7 @@ contains
     real*8 :: rho_exact
     real*8 :: err_L1, err_L2, sum_L1, sum_L2
     real*8 :: err_Linf, diff, x_max_err
-    real*8 :: sinc_factor, celdas_validas, advected_coordinate
-    
-    ! Corrección: Sincronización de variables físicas con initial_conditions
-    real*8 :: r_critical = 100.0d0
-    real*8 :: rho_critical = 1.0d-1
+    real*8 :: sinc_factor, sinc_argument, celdas_validas, advected_coordinate
 
     real*8, allocatable :: p_conv(:,:,:,:)
     character(len=256) :: file_name
@@ -846,14 +1013,18 @@ contains
     x_max_err = x(1)
 
     if (trim(case_name) == 'Conv') then
-      ! Solución exacta en promedios celulares de
-      ! rho(x,t)=1+A sin(2 pi (x-vt)). Las fronteras son periódicas.
-      sinc_factor = sin(pi * dx) / (pi * dx)
+      ! Solución exacta en promedios celulares. Las fronteras son periódicas.
+      sinc_argument = 0.5d0 * advected_wave_number * pi * dx
+      if (abs(sinc_argument) > epsilon(1.0d0)) then
+        sinc_factor = sin(sinc_argument) / sinc_argument
+      else
+        sinc_factor = 1.0d0
+      end if
       celdas_validas = dble(nx)
       do i = 1, nx
         advected_coordinate = x(i) - advected_wave_speed * integration_time
-        rho_exact = 1.0d0 + advected_wave_amplitude * sinc_factor * &
-                    sin(2.0d0 * pi * advected_coordinate)
+        rho_exact = advected_wave_density + advected_wave_amplitude * sinc_factor * &
+                    sin(advected_wave_number * pi * advected_coordinate)
         diff = abs(p(eq_de, i, j_idx, 1) - rho_exact)
         sum_L1 = sum_L1 + diff
         sum_L2 = sum_L2 + diff**2
@@ -867,7 +1038,8 @@ contains
     else
       ! Michel conserva la comparación histórica en la región interior segura.
       allocate(p_conv(neq, 1:nx, 1:ny, 1:nz))
-      call setup_michel_accretion_initial(p_conv, r_critical, rho_critical)
+      call setup_michel_accretion_initial(p_conv, michel_critical_radius, &
+                                           michel_critical_density)
       i_start = max(1, int(0.10d0 * dble(nx)))
       i_end = min(nx, max(i_start, int(0.95d0 * dble(nx))))
       celdas_validas = dble(i_end - i_start + 1)
