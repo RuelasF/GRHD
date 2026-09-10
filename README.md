@@ -1,6 +1,6 @@
 # GRHD2
 
-Este README funciona como manual de usuario y desarrollo de GRHD2. Describe cómo compilar, configurar, ejecutar, verificar y extender el código contenido en este repositorio; su fuente de verdad son las rutinas Fortran y las pruebas versionadas en `tests/`.
+Este README funciona como manual de usuario y desarrollo de GRHD2. Describe cómo compilar, configurar, ejecutar, verificar y extender el código contenido en este repositorio; su fuente son las rutinas Fortran y las pruebas versionadas en `tests/`.
 
 > **Estado físico:** GRHD para un fluido perfecto sobre una métrica analítica fija. No es GRMHD, no evoluciona el espacio-tiempo y no incluye autogravedad del fluido. La salida `GW_signal.dat` es un proxy cuadrupolar Finn--Evans de campo débil, no un *strain* observable ni una extracción gauge-invariant.
 
@@ -46,6 +46,7 @@ El repositorio no versiona configuraciones de producción. Cree localmente un ar
 problem = fishbone_equatorial
 metric = kerr_schild
 geometry = spherical
+logarithmic_r = true
 spin = 0.9
 reconstruction = weno5
 riemann_solver = hlle
@@ -65,7 +66,7 @@ export OMP_NUM_THREADS=8
 ./grhd2 ejemplo.par
 ```
 
-`OMP_NUM_THREADS` debe ajustarse al equipo. El programa exige exactamente un archivo `.par`; ya no existe una ejecución válida sin argumentos.
+`OMP_NUM_THREADS` debe ajustarse al equipo. El programa exige exactamente un archivo `.par`; no permite una ejecución válida sin argumentos.
 
 El ejemplo genera un toro de Fishbone--Moncrief ecuatorial en Kerr--Schild con `a=0.9`, malla `400 x 1 x 200`, WENO5--HLLE y radio logarítmico. La salida se guarda, por defecto, en:
 
@@ -454,7 +455,7 @@ Los parámetros de condición inicial se restringen al `problem` seleccionado. E
 
 ### La malla radial logarítmica falla
 
-Compruebe `logarithmic_r = true` y `r_min > 0`.
+Compruebe `logarithmic_r = true` y `r_min > 1`.
 
 ### EF rechaza el espín
 
