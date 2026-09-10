@@ -19,11 +19,10 @@ tests/test_multidimensional_cfl
 *.sh
 *.py
 *.md
-!docs/MANUAL_GRHD.md
+!README.md
 
 # --- Documentación local no publicada ---
 docs/*
-!docs/MANUAL_GRHD.md
 
 # --- Configuraciones locales de ejecución ---
 par/

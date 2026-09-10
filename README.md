@@ -1,13 +1,8 @@
-# Manual de usuario y desarrollo de GRHD2
+# GRHD2
 
-Este manual describe cómo compilar, configurar, ejecutar, verificar y extender
-el código contenido en este repositorio. Su fuente de verdad es el código
-Fortran actual y los archivos versionados en `par/` y `tests/`.
+Este README funciona como manual de usuario y desarrollo de GRHD2. Describe cómo compilar, configurar, ejecutar, verificar y extender el código contenido en este repositorio; su fuente de verdad son las rutinas Fortran y las pruebas versionadas en `tests/`.
 
-> **Estado físico:** GRHD para un fluido perfecto sobre una métrica analítica
-> fija. No es GRMHD, no evoluciona el espacio-tiempo y no incluye autogravedad
-> del fluido. La salida `GW_signal.dat` es un proxy cuadrupolar Finn--Evans de
-> campo débil, no un *strain* observable ni una extracción gauge-invariant.
+> **Estado físico:** GRHD para un fluido perfecto sobre una métrica analítica fija. No es GRMHD, no evoluciona el espacio-tiempo y no incluye autogravedad del fluido. La salida `GW_signal.dat` es un proxy cuadrupolar Finn--Evans de campo débil, no un *strain* observable ni una extracción gauge-invariant.
 
 ## 1. Requisitos
 
@@ -16,19 +11,16 @@ El flujo probado utiliza:
 - GNU Fortran (`gfortran`);
 - GNU Make;
 - OpenMP, suministrado por `gfortran`;
-- Python 3 para los scripts de análisis;
-- NumPy y Matplotlib para las gráficas;
 - VisIt o ParaView, opcionales, para inspeccionar los VTK.
 
 En Debian/Ubuntu puede instalarse la base con:
 
 ```bash
 sudo apt update
-sudo apt install gfortran make python3 python3-numpy python3-matplotlib
+sudo apt install gfortran make
 ```
 
-La instalación de paquetes es una operación del sistema y no forma parte del
-`Makefile`.
+La instalación de paquetes es una operación del sistema y no forma parte del `Makefile`.
 
 ## 2. Compilación rápida
 
@@ -38,10 +30,7 @@ Desde la raíz del repositorio:
 make -j
 ```
 
-El ejecutable resultante es `grhd2`. Las banderas de producción actuales son
-`-O3`, OpenMP, optimización específica de la máquina y LTO. Para una auditoría
-de memoria o punto flotante conviene reemplazar temporalmente `FFLAGS` por las
-banderas de depuración comentadas en el `Makefile`.
+El ejecutable resultante es `grhd2`. Las banderas de producción actuales son `-O3`, OpenMP, optimización específica de la máquina y LTO. Para una auditoría de memoria o punto flotante conviene reemplazar temporalmente `FFLAGS` por las banderas de depuración comentadas en el `Makefile`.
 
 Para eliminar objetos, módulos, ejecutable y binarios de prueba:
 
@@ -51,33 +40,40 @@ make clean
 
 ## 3. Primer cálculo
 
-Compruebe primero el archivo de parámetros sin iniciar la simulación:
+El repositorio no versiona configuraciones de producción. Cree localmente un archivo `ejemplo.par`; una configuración mínima que aprovecha el *preset* del problema puede comenzar así:
+
+```text
+problem = fishbone_equatorial
+metric = kerr_schild
+geometry = spherical
+spin = 0.9
+reconstruction = weno5
+riemann_solver = hlle
+final_time = 1000.0
+```
+
+Compruebe el archivo sin iniciar la simulación:
 
 ```bash
-./grhd2 --check par/fishbone_equatorial.par
+./grhd2 --check ejemplo.par
 ```
 
 Si la validación termina correctamente, ejecute:
 
 ```bash
 export OMP_NUM_THREADS=8
-./grhd2 par/fishbone_equatorial.par
+./grhd2 ejemplo.par
 ```
 
-`OMP_NUM_THREADS` debe ajustarse al equipo. El programa exige exactamente un
-archivo `.par`; ya no existe una ejecución válida sin argumentos.
+`OMP_NUM_THREADS` debe ajustarse al equipo. El programa exige exactamente un archivo `.par`; ya no existe una ejecución válida sin argumentos.
 
-El ejemplo genera un toro de Fishbone--Moncrief ecuatorial en Kerr--Schild con
-`a=0.9`, malla `400 x 1 x 200`, WENO5--HLLE y radio logarítmico. La salida se
-guarda, por defecto, en:
+El ejemplo genera un toro de Fishbone--Moncrief ecuatorial en Kerr--Schild con `a=0.9`, malla `400 x 1 x 200`, WENO5--HLLE y radio logarítmico. La salida se guarda, por defecto, en:
 
 ```text
 FM_KS_a0.9_data/weno5_hlle/
 ```
 
-Aunque se evolucionan las direcciones radial y azimutal, una sola celda polar
-no resuelve la estructura vertical. Esta configuración debe describirse como
-**modelo ecuatorial 2.5D**, no como simulación 3D.
+Aunque se evolucionan las direcciones radial y azimutal, una sola celda polar no resuelve la estructura vertical. Esta configuración debe describirse como **modelo ecuatorial 2.5D**, no como simulación 3D.
 
 ## 4. Archivos de parámetros
 
@@ -89,13 +85,9 @@ Cada línea activa tiene la forma:
 nombre = valor       # comentario opcional
 ```
 
-Las claves y valores simbólicos no distinguen mayúsculas de minúsculas. Las
-rutas conservan su escritura. Una clave desconocida, duplicada, incompatible
-con el problema o con valor no admisible detiene el programa con un mensaje que
-indica archivo y línea.
+Las claves y valores simbólicos no distinguen mayúsculas de minúsculas. Las rutas conservan su escritura. Una clave desconocida, duplicada, incompatible con el problema o con valor no admisible detiene el programa con un mensaje que indica archivo y línea.
 
-Para dominios esféricos, `theta_min`, `theta_max`, `phi_min` y `phi_max` se
-escriben como múltiplos de pi:
+Para dominios esféricos, `theta_min`, `theta_max`, `phi_min` y `phi_max` se escriben como múltiplos de pi:
 
 ```text
 theta_min = 0
@@ -123,9 +115,7 @@ Se admiten cocientes, por ejemplo `theta_min = 1/2`.
 | `fishbone_sagittal` | Corte FM en `r-theta` | EF esférica | Caso auxiliar |
 | `fishbone_3d` | Toro FM con tres direcciones activas | EF o KS esférica | Implementado; requiere validar resolución |
 
-Cada problema carga un *preset* desde `initialization.f90`; el archivo `.par`
-sobrescribe después los valores especificados. Es aconsejable declarar de
-forma explícita todos los parámetros relevantes para una corrida científica.
+Cada problema carga un *preset* desde `initialization.f90`; el archivo `.par` sobrescribe después los valores especificados. Es aconsejable declarar de forma explícita todos los parámetros relevantes para una corrida científica.
 
 ### 4.3 Métricas y geometrías
 
@@ -157,17 +147,11 @@ riemann_solver = hlle | hllc
 shock_sensor   = true | false
 ```
 
-La profundidad de celdas fantasma se selecciona automáticamente: una para
-Godunov, dos para TVD/WENO3 y tres para MP5/WENO5. `HLLD` no es una opción
-válida: sólo existe un esqueleto que aborta si se invoca internamente.
+La profundidad de celdas fantasma se selecciona automáticamente: una para Godunov, dos para TVD/WENO3 y tres para MP5/WENO5. `HLLD` no es una opción válida: sólo existe un esqueleto que aborta si se invoca internamente.
 
-HLLE es el *baseline* robusto. HLLC está implementado para GRHD mediante un
-marco ortonormal local de cada cara y vuelve a HLLE ante estados degenerados o
-no admisibles.
+HLLE es el *baseline* robusto. HLLC está implementado para GRHD mediante un marco ortonormal local de cada cara y vuelve a HLLE ante estados degenerados o no admisibles.
 
-El sensor de choques puede degradar localmente la reconstrucción hacia métodos
-más robustos. Desactivarlo permite comparar reconstructores puros, pero no es
-una decisión universalmente más estable.
+El sensor de choques puede degradar localmente la reconstrucción hacia métodos más robustos. Desactivarlo permite comparar reconstructores puros, pero no es una decisión universalmente más estable.
 
 ### 4.5 Malla, tiempo y salida
 
@@ -198,8 +182,7 @@ vtk_mapping = physical
 `vtk_mapping` acepta:
 
 - `physical`: mapeo cartesiano físico que conserva la torsión Kerr--Schild;
-- `untwisted`: representación oblata sin la rotación radial, sólo para
-  visualización.
+- `untwisted`: representación oblata sin la rotación radial, sólo para visualización.
 
 Esta opción no cambia el estado ni las coordenadas de evolución.
 
@@ -218,17 +201,13 @@ perturbation_amplitude = 0.01
 perturbation_mode = 1.0
 ```
 
-`pressure_noise` y `density_noise` usan una semilla reproducible. `density_mode`
-inyecta un modo azimutal coherente cuyo número es `perturbation_mode`. La
-amplitud debe satisfacer `0 <= perturbation_amplitude < 1`.
+`pressure_noise` y `density_noise` usan una semilla reproducible. `density_mode` inyecta un modo azimutal coherente cuyo número es `perturbation_mode`. La amplitud debe satisfacer `0 <= perturbation_amplitude < 1`.
 
-Una perturbación solicitada se aplica al comienzo del primer paso para el cual
-el tiempo acumulado ya alcanzó `perturbation_time`; el instante efectivo se
-registra en `perturbation_events.dat`.
+Una perturbación solicitada se aplica al comienzo del primer paso para el cual el tiempo acumulado ya alcanzó `perturbation_time`; el instante efectivo se registra en `perturbation_events.dat`.
 
 ### 4.7 Parámetros específicos por problema
 
-El listado completo se mantiene en `par/README.txt`. Los prefijos son:
+Las claves específicas se validan en `parameters.f90`; sus grupos principales son:
 
 | Problema | Claves específicas |
 |---|---|
@@ -243,13 +222,11 @@ El listado completo se mantiene en `par/README.txt`. Los prefijos son:
 | Explosión fuera del eje | centro, ancho, fondo y amplitudes |
 | Fishbone--Moncrief | `fm_inner_radius`, `fm_pressure_max_radius`, `fm_polytropic_constant` |
 
-Los parámetros de una condición inicial distinta a `problem` son rechazados;
-esto evita configuraciones híbridas accidentales.
+Los parámetros de una condición inicial distinta a `problem` son rechazados; esto evita configuraciones híbridas accidentales.
 
 ## 5. Reinicio desde checkpoint
 
-Los checkpoints actuales usan el identificador `GRHDCP_V3` y contienen malla,
-física, métodos, estado conservado, tiempo, paso y estado de la perturbación.
+Los checkpoints actuales usan el identificador `GRHDCP_V3` y contienen malla, física, métodos, estado conservado, tiempo, paso y estado de la perturbación.
 
 Ejemplo mínimo:
 
@@ -277,9 +254,7 @@ perturbation_amplitude = 0.01
 perturbation_mode = 1.0
 ```
 
-En un reinicio sólo pueden cambiarse controles de tiempo, salida, diagnósticos,
-perturbación y sensor. La malla, métrica, EOS y arquitectura numérica se leen
-del checkpoint y el lector rechaza intentos de modificarlas.
+En un reinicio sólo pueden cambiarse controles de tiempo, salida, diagnósticos, perturbación y sensor. La malla, métrica, EOS y arquitectura numérica se leen del checkpoint y el lector rechaza intentos de modificarlas.
 
 Antes de reiniciar, valide conjuntamente parámetros y checkpoint:
 
@@ -287,9 +262,7 @@ Antes de reiniciar, valide conjuntamente parámetros y checkpoint:
 ./grhd2 --check reinicio.par
 ```
 
-Los checkpoints son volcados binarios Fortran; deben tratarse como ligados a la
-versión del formato, precisión, compilador/arquitectura y forma del estado.
-Conserve siempre el código y manifiesto que los generaron.
+Los checkpoints son volcados binarios Fortran; deben tratarse como ligados a la versión del formato, precisión, compilador/arquitectura y forma del estado. Conserve siempre el código y manifiesto que los generaron.
 
 ## 6. Salidas
 
@@ -299,8 +272,7 @@ La ruta normal es:
 output_folder/scheme_name/
 ```
 
-donde `scheme_name` combina reconstructor y Riemann, por ejemplo
-`weno5_hlle`.
+donde `scheme_name` combina reconstructor y Riemann, por ejemplo `weno5_hlle`.
 
 | Archivo | Contenido |
 |---|---|
@@ -314,13 +286,11 @@ donde `scheme_name` combina reconstructor y Riemann, por ejemplo
 | `GW_signal.dat` | `t`, `h_plus`, `h_cross` del proxy Finn--Evans |
 | `convergence_*.dat` | normas para onda advectada o Michel |
 
-El manifiesto se añade al reiniciar, delimitando cada sesión con `[run]` y
-`[/run]`.
+El manifiesto se añade al reiniciar, delimitando cada sesión con `[run]` y `[/run]`.
 
 ### 6.1 Interpretación de diagnósticos
 
-La tasa de acreción se integra en la primera celda exterior al horizonte con
-la velocidad coordenada efectiva `alpha*v^r - beta^r`.
+La tasa de acreción se integra en la primera celda exterior al horizonte con la velocidad coordenada efectiva `alpha*v^r - beta^r`.
 
 Los modos PPI se definen a partir de la masa azimutal:
 
@@ -329,44 +299,15 @@ C_m = integral D exp(-i m phi) d^3x
 A_m = |C_m| / C_0
 ```
 
-Se reportan partes real e imaginaria, amplitud normalizada y fase para
-`m=1,...,4`.
+Se reportan partes real e imaginaria, amplitud normalizada y fase para `m=1,...,4`.
 
-En `global_diagnostics.dat`, `N_invalid=0` es necesario pero no suficiente para
-validar una corrida. También deben examinarse conservación, sensibilidad a
-resolución, floors, fronteras y método.
+En `global_diagnostics.dat`, `N_invalid=0` es necesario pero no suficiente para validar una corrida. También deben examinarse conservación, sensibilidad a resolución, floors, fronteras y método.
 
-Con `ny=1`, las masas y amplitudes integradas heredan una cuadratura polar de
-una sola celda. No deben interpretarse como integrales tridimensionales
-resueltas.
+Con `ny=1`, las masas y amplitudes integradas heredan una cuadratura polar de una sola celda. No deben interpretarse como integrales tridimensionales resueltas.
 
 ## 7. Visualización y análisis
 
-Para crear perfiles de Fishbone--Moncrief:
-
-```bash
-python3 plot_fm_profiles.py
-```
-
-Con un patrón explícito:
-
-```bash
-python3 plot_fm_profiles.py \
-  'FM_KS_a0.9_data/weno5_hlle/*.vtk' \
-  --field Density --frames 100 \
-  --output figures/fm_a09_density.png --no-show
-```
-
-Consulte todas las opciones con:
-
-```bash
-python3 plot_fm_profiles.py --help
-python3 plot_advected_wave_convergence.py --help
-```
-
-`gw_fm.py` y `gw_qtrans_fm.py` son utilidades históricas de análisis. Antes de
-usarlas en resultados de tesis debe comprobarse que sus convenciones coincidan
-con el manifiesto y formato de la campaña concreta.
+Las salidas VTK pueden inspeccionarse con VisIt o ParaView. Los scripts de análisis y las configuraciones de campañas científicas se mantienen fuera de este repositorio mínimo; cualquier análisis destinado a una publicación debe conservar externamente su versión, dependencias y correspondencia con el manifiesto de la corrida.
 
 ## 8. Pruebas disponibles
 
@@ -382,18 +323,13 @@ make test-cfl
 
 Cobertura actual:
 
-- `test-hllc`: estados uniformes, contactos, métrica general, atmósfera,
-  invariancia de escala y salto relativista fuerte;
-- `test-gw`: radio del horizonte, transformaciones KS, cinemática cartesiana y
-  tensor de esfuerzo Finn--Evans;
-- `test-fm`: propiedades puntuales del dato inicial Fishbone--Moncrief en EF y
-  KS;
+- `test-hllc`: estados uniformes, contactos, métrica general, atmósfera, invariancia de escala y salto relativista fuerte;
+- `test-gw`: radio del horizonte, transformaciones KS, cinemática cartesiana y tensor de esfuerzo Finn--Evans;
+- `test-fm`: propiedades puntuales del dato inicial Fishbone--Moncrief en EF y KS;
 - `test-polar`: periodicidad azimutal, cruce transpolar y paridades;
 - `test-cfl`: condición CFL aditiva en 1D, 2D y 3D con *shift*.
 
-Estas pruebas no sustituyen campañas de convergencia ni validación física.
-Antes de publicar resultados deben registrarse compilador, banderas, commit,
-archivo `.par`, número de hilos y salida completa de las pruebas.
+Estas pruebas no sustituyen campañas de convergencia ni validación física. Antes de publicar resultados deben registrarse compilador, banderas, commit, archivo `.par`, número de hilos y salida completa de las pruebas.
 
 ## 9. Arquitectura del código
 
@@ -430,9 +366,7 @@ leer cabecera .par
   -> diagnósticos, VTK y checkpoints
 ```
 
-El algoritmo reconstruye tiras por dirección, pero no aplica operadores
-temporales separados: las contribuciones espaciales se suman antes de cada
-etapa RK. Por ello no debe documentarse como separación de Strang.
+El algoritmo reconstruye tiras por dirección, pero no aplica operadores temporales separados: las contribuciones espaciales se suman antes de cada etapa RK. Por ello no debe documentarse como separación de Strang.
 
 ## 10. Cómo extender el código
 
@@ -444,12 +378,11 @@ etapa RK. Por ello no debe documentarse como separación de Strang.
 4. Cree el preset en `initialization.f90`.
 5. Implemente el dato inicial y las fronteras en `conditions.f90`.
 6. Añada al menos una prueba unitaria y un `.par` pequeño reproducible.
-7. Documente estado, tolerancias y resultado en `docs/DEVELOPMENT_LOG.md`.
+7. Documente externamente el estado, las tolerancias y el resultado de verificación.
 
 ### 10.2 Añadir una métrica
 
-La métrica debe proporcionar, en coordenadas físicas y si procede
-logarítmicas:
+La métrica debe proporcionar, en coordenadas físicas y si procede logarítmicas:
 
 - `alpha`, `beta^i`, `gamma_ij` y `sqrt(gamma)`;
 - inversa espaciotemporal cuando se solicite;
@@ -457,9 +390,7 @@ logarítmicas:
 - símbolos de Christoffel;
 - derivadas de `ln(alpha)`.
 
-Conecte las rutinas mediante `set_metric_type`. Pruebe determinante, inversa,
-simetrías, derivadas, horizonte, transformación de coordenadas y el límite a
-una métrica ya conocida.
+Conecte las rutinas mediante `set_metric_type`. Pruebe determinante, inversa, simetrías, derivadas, horizonte, transformación de coordenadas y el límite a una métrica ya conocida.
 
 ### 10.3 Añadir un reconstructor o Riemann solver
 
@@ -495,22 +426,17 @@ Cada resultado que se conserve debe incluir:
 - scripts de análisis y versión de dependencias;
 - explicación de cualquier reinicio o reparación de celda.
 
-Los directorios de producción, VTK, checkpoints y logs están excluidos de Git.
-Conserve datos grandes fuera del repositorio junto con un manifiesto trazable.
+Los directorios de producción, VTK, checkpoints y logs están excluidos de Git. Conserve datos grandes fuera del repositorio junto con un manifiesto trazable.
 
 ## 12. Límites de interpretación científica
 
 - Fondo fijo/Cowling: no hay respuesta de la métrica al fluido.
-- Sin autogravedad: se requiere una razón `M_torus/M_BH` físicamente pequeña
-  para interpretar directamente el modelo de fluido de prueba.
+- Sin autogravedad: se requiere una razón `M_torus/M_BH` físicamente pequeña para interpretar directamente el modelo de fluido de prueba.
 - Sin MHD: no aparecen MRI, campos magnéticos ni transporte magnético.
 - Una celda polar: no resuelve espesor vertical, *warping* ni modos 3D.
-- Finn--Evans: proporciona un proxy de frecuencia/fase bajo una misma
-  normalización, no amplitud absoluta observable.
-- Barrido de espín histórico: cambian masa y densidad iniciales; no aísla el
-  efecto causal del espín.
-- Una sola semilla o resolución no establece incertidumbre estadística ni
-  convergencia.
+- Finn--Evans: proporciona un proxy de frecuencia/fase bajo una misma normalización, no amplitud absoluta observable.
+- Barrido de espín histórico: cambian masa y densidad iniciales; no aísla el efecto causal del espín.
+- Una sola semilla o resolución no establece incertidumbre estadística ni convergencia.
 
 ## 13. Solución de problemas
 
@@ -524,8 +450,7 @@ Debe proporcionar un archivo:
 
 ### Se rechaza una clave válida para otro problema
 
-Los parámetros de condición inicial se restringen al `problem` seleccionado.
-Elimine la clave ajena o cambie el problema.
+Los parámetros de condición inicial se restringen al `problem` seleccionado. Elimine la clave ajena o cambie el problema.
 
 ### La malla radial logarítmica falla
 
@@ -533,43 +458,16 @@ Compruebe `logarithmic_r = true` y `r_min > 0`.
 
 ### EF rechaza el espín
 
-La implementación EF representa Schwarzschild; use `spin = 0`. Para Kerr use
-`metric = kerr_schild` con `|spin| <= bh_mass`.
+La implementación EF representa Schwarzschild; use `spin = 0`. Para Kerr use `metric = kerr_schild` con `|spin| <= bh_mass`.
 
 ### Un toro 3D aparece vacío
 
-Verifique que los centros polares realmente muestreen el cuerpo del toro. Un
-número pequeño de celdas en todo `[0,pi]` puede no colocar ninguna celda dentro
-de su espesor angular. Inspeccione el VTK de `final_time = 0` antes de lanzar
-una campaña larga.
+Verifique que los centros polares realmente muestreen el cuerpo del toro. Un número pequeño de celdas en todo `[0,pi]` puede no colocar ninguna celda dentro de su espesor angular. Inspeccione el VTK de `final_time = 0` antes de lanzar una campaña larga.
 
 ### `GW_signal.dat` parece tener amplitud extraña
 
-Compruebe `ny`, distancia registrada, sustracción de atmósfera, horizonte,
-mapeo y normalización. Con `ny=1` la amplitud absoluta no tiene normalización
-3D resuelta.
+Compruebe `ny`, distancia registrada, sustracción de atmósfera, horizonte, mapeo y normalización. Con `ny=1` la amplitud absoluta no tiene normalización 3D resuelta.
 
 ### Una corrida termina sin `N_invalid`
 
-Ese contador sólo existe cuando `ppi_diagnostics = true`. Su ausencia no
-demuestra que la corrida sea válida o inválida.
-
-## 14. Documentación relacionada
-
-- `docs/DEVELOPMENT_LOG.md`: bitácora técnica verificable.
-- `docs/teoria/teoria_desarrollo_grhd.tex`: teoría, formulación e historia de
-  desarrollo en formato LaTeX.
-- `CONTEXTO_GRHD_PARA_PRISM.md`: auditoría científica de campañas anteriores.
-- `extraccion_gw_gauge_invariant.md`: ruta desde el proxy actual hacia métodos
-  perturbativos y extracción relativista.
-- `par/README.txt`: referencia compacta de los parámetros por problema.
-
-Para compilar el documento teórico y resolver sus referencias:
-
-```bash
-cd docs/teoria
-pdflatex -interaction=nonstopmode -halt-on-error teoria_desarrollo_grhd.tex
-bibtex teoria_desarrollo_grhd
-pdflatex -interaction=nonstopmode -halt-on-error teoria_desarrollo_grhd.tex
-pdflatex -interaction=nonstopmode -halt-on-error teoria_desarrollo_grhd.tex
-```
+Ese contador sólo existe cuando `ppi_diagnostics = true`. Su ausencia no demuestra que la corrida sea válida o inválida.
