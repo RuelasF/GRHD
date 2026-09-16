@@ -4,7 +4,7 @@
 #PBS -N inundaciones
 #PBS -l select=1:ncpus=72
 
-# Campaña PPI ecuatorial 2.5D para EF y KS, con MP5 y WENO5.
+# Campaña PPI ecuatorial 2.5D para EF y KS.
 # Uso directo persistente: bash inundaciones.sh --detach
 # Uso con Slurm:           sbatch inundaciones.sh
 # Uso con PBS:             qsub inundaciones.sh
@@ -20,6 +20,11 @@ REPO_BRANCH="${REPO_BRANCH:-main}"
 CONCURRENT_CASES="${CONCURRENT_CASES:-6}"
 BUILD_JOBS="${BUILD_JOBS:-12}"
 PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
+PRIMARY_THREADS="${PRIMARY_THREADS:-72}"
+FALLBACK_THREADS="${FALLBACK_THREADS:-60}"
+RECONSTRUCTIONS="${RECONSTRUCTIONS:-weno5 mp5}"
+LAUNCHER_NAME="${LAUNCHER_NAME:-$(basename "$SCRIPT_PATH")}"
+CAMPAIGN_LABEL="${CAMPAIGN_LABEL:-PPI MP5/WENO5}"
 
 if [[ "$CAMPAIGN_ROOT" =~ [[:space:]] ]]; then
   printf 'ERROR: CAMPAIGN_ROOT no puede contener espacios: %s\n' "$CAMPAIGN_ROOT" >&2
@@ -27,13 +32,13 @@ if [[ "$CAMPAIGN_ROOT" =~ [[:space:]] ]]; then
 fi
 
 show_help() {
-  cat <<'EOF'
-Campaña PPI 800x1x400, t=5000 M, perturbación en t=1000 M.
+  cat <<EOF
+$CAMPAIGN_LABEL: malla 800x1x400, t=5000 M, perturbación en t=1000 M.
 
-  bash inundaciones.sh --detach   Lanza con nohup y devuelve el PID.
-  bash inundaciones.sh           Ejecuta en primer plano.
-  sbatch inundaciones.sh         Envía a Slurm con nombre inundaciones.
-  qsub inundaciones.sh           Envía a PBS con nombre inundaciones.
+  bash $LAUNCHER_NAME --detach   Lanza con nohup y devuelve el PID.
+  bash $LAUNCHER_NAME           Ejecuta en primer plano.
+  sbatch $LAUNCHER_NAME         Envía a Slurm con nombre inundaciones.
+  qsub $LAUNCHER_NAME           Envía a PBS con nombre inundaciones.
 
 Variables opcionales: CAMPAIGN_ROOT, REPO_URL, REPO_BRANCH, BUILD_JOBS.
 PREFLIGHT_ONLY=1 hace clonación, compilación, pruebas y validación sin correr.
@@ -198,12 +203,19 @@ select_thread_budget() {
   done
 
   TOTAL_THREADS=0
-  if (( available >= 72 )) && probe_threads 72; then
-    TOTAL_THREADS=72
-  elif (( available >= 60 )) && probe_threads 60; then
-    TOTAL_THREADS=60
+  [[ "$PRIMARY_THREADS" =~ ^[1-9][0-9]*$ ]] || die 'PRIMARY_THREADS debe ser entero positivo'
+  [[ "$FALLBACK_THREADS" =~ ^[0-9]+$ ]] || die 'FALLBACK_THREADS debe ser entero no negativo'
+
+  if (( available >= PRIMARY_THREADS )) && probe_threads "$PRIMARY_THREADS"; then
+    TOTAL_THREADS="$PRIMARY_THREADS"
+  elif (( FALLBACK_THREADS > 0 && available >= FALLBACK_THREADS )) && \
+       probe_threads "$FALLBACK_THREADS"; then
+    TOTAL_THREADS="$FALLBACK_THREADS"
   else
-    die "se requieren 72 hilos, o al menos 60 para respaldo; disponibles: $available"
+    if (( FALLBACK_THREADS > 0 )); then
+      die "se requieren $PRIMARY_THREADS hilos, o $FALLBACK_THREADS como respaldo; disponibles: $available"
+    fi
+    die "se requieren exactamente $PRIMARY_THREADS hilos; disponibles: $available"
   fi
 
   [[ "$CONCURRENT_CASES" =~ ^[1-9][0-9]*$ ]] || die 'CONCURRENT_CASES debe ser entero positivo'
@@ -216,20 +228,23 @@ select_thread_budget() {
     "$(timestamp)" "$TOTAL_THREADS" "$CONCURRENT_CASES" "$THREADS_PER_CASE"
 }
 
-readonly -a CASES=(
-  ef_a00_weno5
-  ks_a00_weno5
-  ks_a02_weno5
-  ks_a04_weno5
-  ks_a06_weno5
-  ks_a09_weno5
-  ef_a00_mp5
-  ks_a00_mp5
-  ks_a02_mp5
-  ks_a04_mp5
-  ks_a06_mp5
-  ks_a09_mp5
-)
+declare -a CASES=()
+for reconstruction_name in $RECONSTRUCTIONS; do
+  case "$reconstruction_name" in
+    weno3|mp5|weno5) ;;
+    *) die "reconstrucción no admitida para la campaña: $reconstruction_name" ;;
+  esac
+  CASES+=(
+    "ef_a00_${reconstruction_name}"
+    "ks_a00_${reconstruction_name}"
+    "ks_a02_${reconstruction_name}"
+    "ks_a04_${reconstruction_name}"
+    "ks_a06_${reconstruction_name}"
+    "ks_a09_${reconstruction_name}"
+  )
+done
+readonly CASES
+(( ${#CASES[@]} > 0 )) || die 'RECONSTRUCTIONS no puede estar vacío'
 
 case_properties() {
   local label="$1"
@@ -551,8 +566,8 @@ validate_parameter_files
 select_thread_budget
 
 if [[ "$PREFLIGHT_ONLY" == 1 ]]; then
-  printf '[%s] PREFLIGHT PASS: fuente, compilación, pruebas, hilos y 12 archivos .par.\n' \
-    "$(timestamp)"
+  printf '[%s] PREFLIGHT PASS: fuente, compilación, pruebas, hilos y %d archivos .par.\n' \
+    "$(timestamp)" "${#CASES[@]}"
   exit 0
 fi
 
@@ -567,4 +582,5 @@ if (( campaign_status != 0 )); then
   exit "$campaign_status"
 fi
 
-printf '[%s] CAMPAÑA COMPLETA: 12/12 PASS. Resumen: %s\n' "$(timestamp)" "$SUMMARY"
+printf '[%s] CAMPAÑA COMPLETA: %d/%d PASS. Resumen: %s\n' \
+  "$(timestamp)" "${#CASES[@]}" "${#CASES[@]}" "$SUMMARY"

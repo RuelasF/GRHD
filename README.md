@@ -351,6 +351,14 @@ Una segunda ejecución con la misma `CAMPAIGN_ROOT` omite casos completos y crea
 
 Este barrido conserva `r_in`, `r_pmax` y `K`, no la masa o la densidad máxima inicial del toro. Por ello sirve para comparar las familias configuradas y estudiar señales PPI, pero las diferencias entre espines no deben presentarse como efecto causal aislado de `a` sin una campaña adicional que empareje propiedades físicas del disco. `GW_signal.dat` sigue siendo un proxy Finn--Evans con una sola celda polar, no una amplitud tridimensional observable.
 
+El lanzador `inundaciones_weno3.sh` reproduce los mismos seis fondos exclusivamente con WENO3--HLLE en otro directorio, `inundaciones_ppi_weno3_800_t5000`. Está configurado para un servidor con exactamente 45 hilos: ejecuta tres casos simultáneos con 15 hilos cada uno y completa la matriz en dos tandas. Conserva la misma malla, perturbación, tiempos, salidas y reglas de reanudación:
+
+```bash
+bash inundaciones_weno3.sh --detach
+```
+
+Su log general queda en `../inundaciones_ppi_weno3_800_t5000/logs/inundaciones.driver.log` y el volumen esperado de resultados es cercano a 18 GB. La campaña histórica mostró que WENO3 podía sembrar modos antes de aplicar la perturbación explícita; por ello esta nueva serie es un control numérico útil, pero el crecimiento anterior a `t=1000 M` debe analizarse y reportarse por separado, no atribuirse a la perturbación programada.
+
 ## 7. Visualización y análisis
 
 Las salidas VTK pueden inspeccionarse con VisIt o ParaView. Salvo el controlador reproducible `inundaciones.sh`, los scripts de análisis y las configuraciones exploratorias se mantienen fuera de este repositorio mínimo; cualquier análisis destinado a una publicación debe conservar externamente su versión, dependencias y correspondencia con el manifiesto de la corrida.

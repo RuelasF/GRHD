@@ -22,6 +22,7 @@ tests/test_output_paths
 *.bak
 *.sh
 !inundaciones.sh
+!inundaciones_weno3.sh
 *.py
 *.md
 !README.md
