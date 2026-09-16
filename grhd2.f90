@@ -94,7 +94,11 @@ program grhd2
     call init_wavespeed_solver()
     call read_checkpoint_state(20, n_steps, integration_time)
     close(20)
-    
+
+    ! Algunos bordes necesitan datos analíticos auxiliares que no están en U.
+    ! Se reconstruyen desde los parámetros guardados antes de recuperar P.
+    call prepare_case_boundary_data()
+
     ! Sincronizamos y recuperamos primitivas para el integrador RK3
     u = up
 
@@ -110,7 +114,7 @@ program grhd2
     !$OMP END PARALLEL DO
 
     call set_boundary_conditions(p)
-    next_checkpoint = (int(integration_time / checkpoint_interval) + 1.0d0) * checkpoint_interval
+    next_checkpoint = dble(int(integration_time / checkpoint_interval) + 1) * checkpoint_interval
   else
     ! --- ARRANQUE EN FRÍO NORMAL (T=0) ---
     integration_time = 0.0d0
@@ -141,7 +145,9 @@ program grhd2
   end if
 
   ! -------------------------------------------
-  next_save_time =  integration_time + save_interval
+  ! Mantiene el calendario absoluto de salidas al reiniciar; desplazarlo desde
+  ! integration_time omitiría los frames nominales posteriores al checkpoint.
+  next_save_time = dble(int(integration_time/save_interval) + 1)*save_interval
   call update_adaptive_dt() ! Inicialización del primer dt
 
   session_start_time = integration_time
@@ -263,7 +269,7 @@ program grhd2
     ! =====================================================================
     ! Corrección: Sustitución de 'is_flat' por la validación arquitectónica global
     if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
-      if (mod(n_steps, 10) == 0) then
+      if (mod(n_steps, extraction_stride) == 0) then
         if (do_gw_extraction) call calc_gw_strain(integration_time)
         if (do_mdot_extraction) call calc_m_dot(integration_time)
       end if
@@ -274,22 +280,24 @@ program grhd2
     end if
 
     ! --- CONSERVACIÓN DE MASA GLOBAL ---
-    if (mod(n_steps, 1000) == 0) then
-      total_mass = 0.0d0
+    if (mass_monitor_stride > 0) then
+      if (mod(n_steps, mass_monitor_stride) == 0) then
+        total_mass = 0.0d0
       
       ! Integral de volumen lógico 3D Coordenado
       ! (El Jacobiano dr/dx ya está matemáticamente embebido en el sqrt(gamma) dentro de u(eq_de))
-      !$OMP PARALLEL DO REDUCTION(+:total_mass) PRIVATE(i, j, k)
-      do k = 1, nz
-        do j = 1, ny
-          do i = 1, nx
-            total_mass = total_mass + u(eq_de, i, j, k) * dx * dy * dz
+        !$OMP PARALLEL DO REDUCTION(+:total_mass) PRIVATE(i, j, k)
+        do k = 1, nz
+          do j = 1, ny
+            do i = 1, nx
+              total_mass = total_mass + u(eq_de, i, j,k) * dx * dy * dz
+            end do
           end do
         end do
-      end do
-      !$OMP END PARALLEL DO
-      
-      write(*,*) 'Total Mass in domain: ', total_mass
+        !$OMP END PARALLEL DO
+
+        write(*,*) 'Total Mass in domain: ', total_mass
+      end if
     end if
 
     ! --- CRONÓMETRO INTELIGENTE (ETA) ---
@@ -333,6 +341,18 @@ program grhd2
     end if
     
   end do
+
+  ! Garantiza una muestra diagnóstica exactamente en el tiempo final aunque
+  ! el último paso no coincida con el stride periódico.
+  if (do_ppi_diagnostics .and. mod(n_steps, diagnostic_stride) /= 0) then
+    call calc_ppi_modes(integration_time)
+    call calc_global_diagnostics(integration_time)
+  end if
+  if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0 .and. &
+      mod(n_steps, extraction_stride) /= 0) then
+    if (do_gw_extraction) call calc_gw_strain(integration_time)
+    if (do_mdot_extraction) call calc_m_dot(integration_time)
+  end if
 
   ! Evaluación final de errores L1/L2 si corresponde al test
   call calc_convergence_norms() 

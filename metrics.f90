@@ -6,10 +6,9 @@
 ! gravitacionales) y las derivadas de la métrica necesarias para los términos fuente del RHS.
 !
 ! Soporte de Métricas:
-! 1. Minkowski (Cartesiano 1D/2D Plano)
-! 2. Minkowski Cilíndrico (Axisimétrico sin gravedad)
-! 3. Schwarzschild en coordenadas de Eddington-Finkelstein (EF).
-! 4. Kerr en coordenadas de Kerr-Schild (KS).
+! 1. Minkowski en coordenadas cartesianas, cilíndricas o esféricas.
+! 2. Schwarzschild en coordenadas de Eddington-Finkelstein (EF).
+! 3. Kerr en coordenadas de Kerr-Schild (KS).
 ! =======================================================================================
 
 module metrics
@@ -120,9 +119,21 @@ contains
             print *, "============================================"
             
           case ('Spherical')
-            ! Placeholder por si en el futuro agregas espacio plano en esféricas
-            print *, "CRITICAL ERROR: Flat Spherical metric not yet implemented."
-            stop
+            if (use_log_r) then
+              calculate_metric => metric_minkowski_spherical_log
+              calculate_christoffel_symbols => christoffel_minkowski_spherical_log
+              calculate_metric_derivatives => metric_derivs_minkowski_spherical_log
+              print *, "================================================"
+              print *, " METRIC ASSIGNED: Flat Minkowski (Log Spherical)"
+              print *, "================================================"
+            else
+              calculate_metric => metric_minkowski_spherical_phys
+              calculate_christoffel_symbols => christoffel_minkowski_spherical_phys
+              calculate_metric_derivatives => metric_derivs_minkowski_spherical_phys
+              print *, "============================================"
+              print *, " METRIC ASSIGNED: Flat Minkowski (Spherical)"
+              print *, "============================================"
+            end if
             
           case default
             print *, "CRITICAL ERROR: Unrecognized geom_type for Minkowski."
@@ -161,8 +172,8 @@ contains
       ! ---------------------------------------------------------
       case ('Kerr-Schild')
         
-        if (trim(geom_type) /= 'Spherical') then
-          print *, "CRITICAL ERROR: KS Metric strictly requires Spherical geometry."
+        if (trim(geom_type) /= 'Spheroidal') then
+          print *, "CRITICAL ERROR: KS Metric strictly requires Spheroidal geometry."
           stop
         end if
         
@@ -171,14 +182,14 @@ contains
           calculate_christoffel_symbols => christoffel_ks_log
           calculate_metric_derivatives => metric_derivs_ks_log
           print *, "============================================"
-          print *, " METRIC ASSIGNED: KS (Logarithmic Spherical)"
+          print *, " METRIC ASSIGNED: KS (Logarithmic Spheroidal)"
           print *, "============================================"
         else
           calculate_metric => metric_ks_phys
           calculate_christoffel_symbols => christoffel_ks_phys
           calculate_metric_derivatives => metric_derivs_ks_phys
           print *, "============================================"
-          print *, " METRIC ASSIGNED: KS (Physical Spherical)   "
+          print *, " METRIC ASSIGNED: KS (Physical Spheroidal)   "
           print *, "============================================"
         end if
         
@@ -247,8 +258,162 @@ contains
 
 
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  ! ESPACIO-TIEMPO DE MINKOWSKI CILÍNDRICO AXISIMÉTRICO (r, z, phi)
-  ! Mapeo Lógico: x1 = r (rho), x2 = z, x3 = phi
+  ! ESPACIO-TIEMPO DE MINKOWSKI EN COORDENADAS ESFÉRICAS (r, theta, phi)
+  ! La curvatura es nula, pero la base coordenada produce fuentes geométricas.
+  ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+  subroutine metric_minkowski_spherical_phys(r_phys, theta, alpha, beta, gamma, gmunu, det, dlnalpha)
+    implicit none
+    real*8, intent(in) :: r_phys, theta
+    real*8, intent(out), optional :: alpha, beta(3), gamma(3,3), det
+    real*8, intent(out), optional :: gmunu(0:3,0:3), dlnalpha(0:3)
+    real*8 :: sin_theta, sin2, r2
+
+    r2 = r_phys**2
+    sin_theta = sin(theta)
+    sin2 = sin_theta**2
+
+    if (present(alpha)) alpha = 1.0d0
+    if (present(beta)) beta = 0.0d0
+    if (present(gamma)) then
+      gamma = 0.0d0
+      gamma(1,1) = 1.0d0
+      gamma(2,2) = r2
+      gamma(3,3) = r2*sin2
+    end if
+    if (present(det)) det = r2*r2*sin2
+    if (present(dlnalpha)) dlnalpha = 0.0d0
+
+    if (present(gmunu)) then
+      gmunu = 0.0d0
+      gmunu(0,0) = -1.0d0
+      gmunu(1,1) = 1.0d0
+      gmunu(2,2) = 1.0d0/r2
+      gmunu(3,3) = 1.0d0/max(r2*sin2, 1.0d-30)
+    end if
+  end subroutine metric_minkowski_spherical_phys
+
+
+  subroutine metric_derivs_minkowski_spherical_phys(r_phys, theta, dg)
+    implicit none
+    real*8, intent(in) :: r_phys, theta
+    real*8, intent(out) :: dg(0:3,0:3,1:3)
+    real*8 :: sin_theta, cos_theta
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    dg = 0.0d0
+    dg(2,2,1) = 2.0d0*r_phys
+    dg(3,3,1) = 2.0d0*r_phys*sin_theta**2
+    dg(3,3,2) = 2.0d0*r_phys**2*sin_theta*cos_theta
+    if (ny == 1) dg(:,:,2) = 0.0d0
+  end subroutine metric_derivs_minkowski_spherical_phys
+
+
+  subroutine christoffel_minkowski_spherical_phys(r_phys, theta, chris)
+    implicit none
+    real*8, intent(in) :: r_phys, theta
+    real*8, intent(out) :: chris(0:3,0:3,0:3)
+    real*8 :: sin_theta, cos_theta, safe_sin
+
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    safe_sin = sign(max(abs(sin_theta), 1.0d-20), sin_theta)
+    chris = 0.0d0
+
+    chris(1,2,2) = -r_phys
+    chris(1,3,3) = -r_phys*sin_theta**2
+    chris(2,1,2) = 1.0d0/r_phys
+    chris(2,2,1) = chris(2,1,2)
+    chris(2,3,3) = -sin_theta*cos_theta
+    chris(3,1,3) = 1.0d0/r_phys
+    chris(3,3,1) = chris(3,1,3)
+    chris(3,2,3) = cos_theta/safe_sin
+    chris(3,3,2) = chris(3,2,3)
+  end subroutine christoffel_minkowski_spherical_phys
+
+
+  ! Malla lógica x=ln(r). La transformación añade gamma_xx=r^2 y
+  ! Gamma^x_xx=1 aunque el espacio-tiempo continúa siendo plano.
+  subroutine metric_minkowski_spherical_log(x_pos, theta, alpha, beta, gamma, gmunu, det, dlnalpha)
+    implicit none
+    real*8, intent(in) :: x_pos, theta
+    real*8, intent(out), optional :: alpha, beta(3), gamma(3,3), det
+    real*8, intent(out), optional :: gmunu(0:3,0:3), dlnalpha(0:3)
+    real*8 :: r_phys, r2, sin_theta, sin2
+
+    r_phys = exp(x_pos)
+    r2 = r_phys**2
+    sin_theta = sin(theta)
+    sin2 = sin_theta**2
+
+    if (present(alpha)) alpha = 1.0d0
+    if (present(beta)) beta = 0.0d0
+    if (present(gamma)) then
+      gamma = 0.0d0
+      gamma(1,1) = r2
+      gamma(2,2) = r2
+      gamma(3,3) = r2*sin2
+    end if
+    if (present(det)) det = r2**3*sin2
+    if (present(dlnalpha)) dlnalpha = 0.0d0
+
+    if (present(gmunu)) then
+      gmunu = 0.0d0
+      gmunu(0,0) = -1.0d0
+      gmunu(1,1) = 1.0d0/r2
+      gmunu(2,2) = 1.0d0/r2
+      gmunu(3,3) = 1.0d0/max(r2*sin2, 1.0d-30)
+    end if
+  end subroutine metric_minkowski_spherical_log
+
+
+  subroutine metric_derivs_minkowski_spherical_log(x_pos, theta, dg)
+    implicit none
+    real*8, intent(in) :: x_pos, theta
+    real*8, intent(out) :: dg(0:3,0:3,1:3)
+    real*8 :: r2, sin_theta, cos_theta
+
+    r2 = exp(2.0d0*x_pos)
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    dg = 0.0d0
+    dg(1,1,1) = 2.0d0*r2
+    dg(2,2,1) = 2.0d0*r2
+    dg(3,3,1) = 2.0d0*r2*sin_theta**2
+    dg(3,3,2) = 2.0d0*r2*sin_theta*cos_theta
+    if (ny == 1) dg(:,:,2) = 0.0d0
+  end subroutine metric_derivs_minkowski_spherical_log
+
+
+  subroutine christoffel_minkowski_spherical_log(x_pos, theta, chris)
+    implicit none
+    real*8, intent(in) :: x_pos, theta
+    real*8, intent(out) :: chris(0:3,0:3,0:3)
+    real*8 :: sin_theta, cos_theta, safe_sin, dummy
+
+    dummy = x_pos
+    sin_theta = sin(theta)
+    cos_theta = cos(theta)
+    safe_sin = sign(max(abs(sin_theta), 1.0d-20), sin_theta)
+    chris = 0.0d0
+
+    chris(1,1,1) = 1.0d0
+    chris(1,2,2) = -1.0d0
+    chris(1,3,3) = -sin_theta**2
+    chris(2,1,2) = 1.0d0
+    chris(2,2,1) = chris(2,1,2)
+    chris(2,3,3) = -sin_theta*cos_theta
+    chris(3,1,3) = 1.0d0
+    chris(3,3,1) = chris(3,1,3)
+    chris(3,2,3) = cos_theta/safe_sin
+    chris(3,3,2) = chris(3,2,3)
+  end subroutine christoffel_minkowski_spherical_log
+
+
+  ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  ! ESPACIO-TIEMPO DE MINKOWSKI CILÍNDRICO AXISIMÉTRICO (rho, phi, z)
+  ! Orden del código: x1 = rho, x2 = phi (degenerada), x3 = z (activa).
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   
   subroutine metric_cylindrical(x_pos, y_pos, alpha, beta, gamma, gmunu, det, dlnalpha)
@@ -263,12 +428,12 @@ contains
     if (present(alpha)) alpha = 1.0d0
     if (present(beta))  beta  = 0.0d0
     
-    ! Mapeo Estándar: x1 = r, x2 = z, x3 = phi
+    ! Mapeo del jet: x1 = rho, x2 = phi, x3 = z.
     if (present(gamma)) then
       gamma = 0.0d0
-      gamma(1,1) = 1.0d0     ! g_rr = 1
-      gamma(2,2) = 1.0d0     ! g_zz = 1
-      gamma(3,3) = x_pos**2  ! g_phiphi = r^2
+      gamma(1,1) = 1.0d0     ! g_rhorho = 1
+      gamma(2,2) = x_pos**2  ! g_phiphi = rho^2
+      gamma(3,3) = 1.0d0     ! g_zz = 1
     end if
     
     if (present(det)) det = x_pos**2
@@ -279,8 +444,8 @@ contains
       gmunu = 0.0d0
       gmunu(0,0) = -1.0d0
       gmunu(1,1) =  1.0d0
-      gmunu(2,2) =  1.0d0
-      gmunu(3,3) =  1.0d0 / max(x_pos**2, 1.0d-20) 
+      gmunu(2,2) =  1.0d0 / max(x_pos**2, 1.0d-20)
+      gmunu(3,3) =  1.0d0
     end if
   end subroutine metric_cylindrical
 
@@ -291,14 +456,14 @@ contains
     real*8 :: dummy
     dummy = y_pos
     
-    chris = 0.0d0 
-    
-    ! Símbolos de Christoffel (x1=r, x2=z, x3=phi)
-    ! Gamma^r_{phi phi} = -r
-    chris(1, 3, 3) = -x_pos
-    
-    chris(3, 1, 3) = 1.0d0 / max(x_pos, 1.0d-15)
-    chris(3, 3, 1) = 1.0d0 / max(x_pos, 1.0d-15)
+    chris = 0.0d0
+
+    ! Símbolos de Christoffel (x1=rho, x2=phi, x3=z)
+    ! Gamma^rho_{phi phi} = -rho
+    chris(1, 2, 2) = -x_pos
+
+    chris(2, 1, 2) = 1.0d0 / max(x_pos, 1.0d-15)
+    chris(2, 2, 1) = 1.0d0 / max(x_pos, 1.0d-15)
   end subroutine christoffel_cylindrical
 
   subroutine metric_derivs_cylindrical(x_pos, y_pos, dg)
@@ -310,9 +475,9 @@ contains
     dummy = y_pos
     dg = 0.0d0 
     
-    ! d/dr (g_phiphi) = d/dr (r^2) = 2r
-    ! Inyecta la fuerza centrífuga en S_phi
-    dg(3,3,1) = 2.0d0 * x_pos
+    ! d/drho (g_phiphi) = d/drho (rho^2) = 2rho.
+    ! Su contracción con T^{phi phi} produce la fuente radial centrífuga.
+    dg(2,2,1) = 2.0d0 * x_pos
   end subroutine metric_derivs_cylindrical
 
 
@@ -582,7 +747,7 @@ contains
 
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   ! ESPACIO-TIEMPO DE KERR-SCHILD (KS) 3D ENTRANTE
-  ! Métrica Física Pura (r_phys, theta, phi)
+  ! Métrica en coordenadas esferoidales entrantes (r_phys, theta, phi)
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
   subroutine metric_ks_phys(r_phys, y_pos, alpha, beta, gamma, gmunu, det, dlnalpha)
@@ -789,10 +954,26 @@ contains
             d_nu_g = 0.0d0
             d_rho_g = 0.0d0
             
-            ! Solo existen derivadas en las direcciones espaciales r (1) y theta (2)
-            if (mu == 1 .or. mu == 2) d_mu_g = dg(rho, nu, mu)
-            if (nu == 1 .or. nu == 2) d_nu_g = dg(rho, mu, nu)
-            if (rho == 1 .or. rho == 2) d_rho_g = dg(mu, nu, rho)
+            ! Solo existen derivadas en las direcciones espaciales r (1) y theta (2).
+            ! Los CASE con indices constantes evitan formar accidentalmente dg(:,:,0).
+            select case (mu)
+            case (1)
+              d_mu_g = dg(rho, nu, 1)
+            case (2)
+              d_mu_g = dg(rho, nu, 2)
+            end select
+            select case (nu)
+            case (1)
+              d_nu_g = dg(rho, mu, 1)
+            case (2)
+              d_nu_g = dg(rho, mu, 2)
+            end select
+            select case (rho)
+            case (1)
+              d_rho_g = dg(mu, nu, 1)
+            case (2)
+              d_rho_g = dg(mu, nu, 2)
+            end select
             
             chris(lambda, mu, nu) = chris(lambda, mu, nu) + &
               0.5d0 * gmunu_up(lambda, rho) * (d_mu_g + d_nu_g - d_rho_g)
@@ -1028,9 +1209,24 @@ contains
             d_nu_g = 0.0d0
             d_rho_g = 0.0d0
             
-            if (mu == 1 .or. mu == 2) d_mu_g = dg(rho, nu, mu)
-            if (nu == 1 .or. nu == 2) d_nu_g = dg(rho, mu, nu)
-            if (rho == 1 .or. rho == 2) d_rho_g = dg(mu, nu, rho)
+            select case (mu)
+            case (1)
+              d_mu_g = dg(rho, nu, 1)
+            case (2)
+              d_mu_g = dg(rho, nu, 2)
+            end select
+            select case (nu)
+            case (1)
+              d_nu_g = dg(rho, mu, 1)
+            case (2)
+              d_nu_g = dg(rho, mu, 2)
+            end select
+            select case (rho)
+            case (1)
+              d_rho_g = dg(mu, nu, 1)
+            case (2)
+              d_rho_g = dg(mu, nu, 2)
+            end select
             
             chris(lambda, mu, nu) = chris(lambda, mu, nu) + &
               0.5d0 * gmunu_up(lambda, rho) * (d_mu_g + d_nu_g - d_rho_g)

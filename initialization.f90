@@ -95,9 +95,9 @@ contains
     end if
     
     ! Prevención de división por cero para dominios degradados (ej. casos 1D o 2D)
-    dx = (x_max - x_min) / max(1, nx)
-    dy = (y_max - y_min) / max(1, ny)
-    dz = (z_max - z_min) / max(1, nz)
+    dx = (x_max - x_min) / dble(max(1, nx))
+    dy = (y_max - y_min) / dble(max(1, ny))
+    dz = (z_max - z_min) / dble(max(1, nz))
 
     ! Asignación dinámica de memoria geométrica tridimensional
     allocate(x(-nghost:nx+nghost), x_face(0:nx))
@@ -353,7 +353,7 @@ contains
             alpha_f_y(i,j,k) = a
             beta_f_y(:,i,j,k) = b(:)
             gamma_f_y(:,:,i,j,k) = g(:,:)
-            if (trim(geom_type) == 'Spherical' .and. &
+            if (is_polar_geometry(geom_type) .and. &
                 abs(sin(y_face(j-1))) <= 64.0d0*epsilon(1.0d0)) then
               ! La cara polar colapsa a una línea: su elemento de área es cero.
               ! Se fija exactamente para que el redondeo de sin(pi) no deje un
@@ -580,6 +580,7 @@ contains
     khi_pressure = 2.5d0
     khi_perturbation_amplitude = 0.01d0
     khi_perturbation_wave_number = 10.0d0
+    khi_perturbation_width = 0.05d0
     
     nx = 400 ; r_min = -0.5d0 ; r_max = 0.5d0
     ny = 1   ; y_min = 0.0d0  ; y_max = 1.0d0
@@ -613,7 +614,8 @@ contains
     
     ! Dominio de Del Zanna (Astrofísica Clásica)
     nx = 320 ; r_min = 0.0d0 ; r_max = 16.0d0
-    ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
+    ! Una sola celda azimutal centrada en phi=pi/2: el VTK queda en el plano Y-Z.
+    ny = 1   ; y_min = 0.0d0 ; y_max = pi
     nz = 800 ; z_min = 0.0d0 ; z_max = 40.0d0
 
     final_time = 120.0d0 
@@ -723,7 +725,7 @@ contains
     
     nx = 400 ; r_min = 1.0d0 ; r_max = 121.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
-    nz = 200 ; z_min = 0.0d0 ; z_max = 2.0*pi
+    nz = 200 ; z_min = 0.0d0 ; z_max = 2.0d0*pi
 
     final_time = 2000.0d0
     CFL = 0.4d0
@@ -735,7 +737,7 @@ contains
 
   subroutine setup_fishbone_moncrief_equatorial()
     case_name = 'FishMoncEqu'
-    geom_type = 'Spherical'
+    geom_type = 'Spheroidal'
     metric_type = 'Kerr-Schild'
     use_shock_sensor = .false.
     ! do_mdot_extraction = .true.
@@ -753,7 +755,7 @@ contains
     ! Caso original Ecuatorial (1D/2D en phi)
     nx = 400 ; r_min = 1.2d0 ; r_max = 40.0d0
     ny = 1   ; y_min = 0     ; y_max = pi     ! Fijo en el ecuador
-    nz = 200 ; z_min = 0.0d0 ; z_max = 2.0*pi
+    nz = 200 ; z_min = 0.0d0 ; z_max = 2.0d0*pi
 
     final_time = 1000.0d0
     CFL = 0.4d0            

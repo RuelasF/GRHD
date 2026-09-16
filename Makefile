@@ -15,8 +15,12 @@ TEST_GW_STRESS_TARGET = tests/test_gw_stress
 TEST_FM_TARGET = tests/test_fm_initial
 TEST_POLAR_TARGET = tests/test_polar_boundaries
 TEST_CFL_TARGET = tests/test_multidimensional_cfl
+TEST_MINKOWSKI_SPHERICAL_TARGET = tests/test_minkowski_spherical
+TEST_CASE_CORRECTIONS_TARGET = tests/test_case_corrections
+TEST_CHECKPOINT_TARGET = tests/test_checkpoint_v4
+TEST_OUTPUT_TARGET = tests/test_output_paths
 
-.PHONY: test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl clean
+.PHONY: test test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output clean
 
 # Lista de archivos objeto en el orden estricto de dependencias
 OBJS = variables.o \
@@ -34,6 +38,8 @@ OBJS = variables.o \
 # Regla principal para construir el ejecutable
 $(TARGET): $(OBJS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJS)
+
+test: test-hllc test-gw test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output
 
 test-hllc: variables.o metrics.o equations.o fluxes.o tests/test_hllc_fluxes.f90
 	$(FC) $(FFLAGS) -o $(TEST_HLLC_TARGET) tests/test_hllc_fluxes.f90 variables.o metrics.o equations.o fluxes.o
@@ -61,6 +67,22 @@ test-cfl: variables.o metrics.o equations.o fluxes.o reconstruction.o evolution.
 	$(FC) $(FFLAGS) -o $(TEST_CFL_TARGET) tests/test_multidimensional_cfl.f90 variables.o metrics.o equations.o fluxes.o reconstruction.o evolution.o
 	./$(TEST_CFL_TARGET)
 
+test-minkowski-spherical: variables.o metrics.o tests/test_minkowski_spherical.f90
+	$(FC) $(FFLAGS) -o $(TEST_MINKOWSKI_SPHERICAL_TARGET) tests/test_minkowski_spherical.f90 variables.o metrics.o
+	./$(TEST_MINKOWSKI_SPHERICAL_TARGET)
+
+test-cases: variables.o parameters.o metrics.o conditions.o equations.o fluxes.o initialization.o tests/test_case_corrections.f90
+	$(FC) $(FFLAGS) -o $(TEST_CASE_CORRECTIONS_TARGET) tests/test_case_corrections.f90 variables.o parameters.o metrics.o conditions.o equations.o fluxes.o initialization.o
+	./$(TEST_CASE_CORRECTIONS_TARGET)
+
+test-checkpoint: variables.o metrics.o conditions.o output.o tests/test_checkpoint_v4.f90
+	$(FC) $(FFLAGS) -o $(TEST_CHECKPOINT_TARGET) tests/test_checkpoint_v4.f90 variables.o metrics.o conditions.o output.o
+	./$(TEST_CHECKPOINT_TARGET)
+
+test-output: variables.o metrics.o conditions.o output.o tests/test_output_paths.f90
+	$(FC) $(FFLAGS) -o $(TEST_OUTPUT_TARGET) tests/test_output_paths.f90 variables.o metrics.o conditions.o output.o
+	./$(TEST_OUTPUT_TARGET)
+
 # Regla genérica para compilar archivos .f90 a objetos .o
 %.o: %.f90
 	$(FC) $(FFLAGS) -c $<
@@ -80,4 +102,4 @@ grhd2.o: variables.o parameters.o metrics.o initialization.o conditions.o equati
 
 # Limpiar archivos compilados (comando: make clean)
 clean:
-	rm -f *.o *.mod $(TARGET) $(TEST_HLLC_TARGET) $(TEST_GW_GEOMETRY_TARGET) $(TEST_GW_STRESS_TARGET) $(TEST_FM_TARGET) $(TEST_POLAR_TARGET) $(TEST_CFL_TARGET)
+	rm -f *.o *.mod $(TARGET) $(TEST_HLLC_TARGET) $(TEST_GW_GEOMETRY_TARGET) $(TEST_GW_STRESS_TARGET) $(TEST_FM_TARGET) $(TEST_POLAR_TARGET) $(TEST_CFL_TARGET) $(TEST_MINKOWSKI_SPHERICAL_TARGET) $(TEST_CASE_CORRECTIONS_TARGET) $(TEST_CHECKPOINT_TARGET) $(TEST_OUTPUT_TARGET)

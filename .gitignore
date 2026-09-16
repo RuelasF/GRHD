@@ -8,6 +8,10 @@ tests/test_gw_stress
 tests/test_fm_initial
 tests/test_polar_boundaries
 tests/test_multidimensional_cfl
+tests/test_minkowski_spherical
+tests/test_case_corrections
+tests/test_checkpoint_v4
+tests/test_output_paths
 
 # --- Resultados y Checkpoints de Simulación ---
 *.dat
@@ -17,6 +21,7 @@ tests/test_multidimensional_cfl
 *.log
 *.bak
 *.sh
+!inundaciones.sh
 *.py
 *.md
 !README.md
@@ -42,6 +47,7 @@ FishboneMoncrief*/
 FM_*/
 AdvectedWave_*/
 EFKS_comparison_logs_and_figures/
+.validation/
 
 # --- Scripts auxiliares y Otros ---
 *.sample

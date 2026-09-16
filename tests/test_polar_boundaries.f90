@@ -16,19 +16,25 @@ program test_polar_boundaries
   case_name = 'FishMonc3D'
 
   allocate(q(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+  allocate(alpha_c(nx,ny,nz), beta_c(3,nx,ny,nz))
+  alpha_c = 1.0d0
+  beta_c = 0.0d0
   call fill_interior(q)
   call set_boundary_conditions(q)
   call check_three_dimensional_poles(q, failures)
-  deallocate(q)
+  deallocate(q, alpha_c, beta_c)
 
   ny = 4
   nz = 1
   case_name = 'FishMoncSag'
   allocate(q(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+  allocate(alpha_c(nx,ny,nz), beta_c(3,nx,ny,nz))
+  alpha_c = 1.0d0
+  beta_c = 0.0d0
   call fill_interior(q)
   call set_boundary_conditions(q)
   call check_axisymmetric_poles(q, failures)
-  deallocate(q)
+  deallocate(q, alpha_c, beta_c)
 
   if (failures /= 0) then
     write(*,'(A,I0)') 'POLAR BOUNDARY TESTS FAILED: ', failures

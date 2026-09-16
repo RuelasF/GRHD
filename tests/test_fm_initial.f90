@@ -13,7 +13,6 @@ program test_fm_initial
   rho_floor = 1.0d-10
   p_floor = 1.0d-13
   bh_mass = 1.0d0
-  geom_type = 'Spherical'
   use_log_r = .false.
 
   call check_model('Eddington-Finkelstein', 0.0d0, 6.0d0, 12.0d0, 0.015d0, failures)
@@ -38,6 +37,11 @@ contains
     logical :: ok, inside
 
     metric_type = metric_name
+    if (trim(metric_name) == 'Kerr-Schild') then
+      geom_type = 'Spheroidal'
+    else
+      geom_type = 'Spherical'
+    end if
     a_spin = spin
     call set_metric_type()
     call prepare_fishbone_moncrief(r_in, r_center, l_ang, W_in, ok)
@@ -55,6 +59,8 @@ contains
                      state_center(eq_pr) > p_floor, failures)
     call check_specific_angular_momentum(metric_name, state_center, alpha, beta, g, &
                                          l_ang, failures)
+    call check_atmosphere_projection(metric_name, r_center, r_in, K_poly, l_ang, &
+                                     W_in, alpha, beta, g, state_center, failures)
 
     radial_offset = 1.0d-3 * r_center
     call evaluate_at_point(r_center-radial_offset, pi/2.0d0, r_in, K_poly, &
@@ -95,6 +101,46 @@ contains
     call evaluate_fishbone_moncrief_state(radius, r_in, K_poly, l_ang, W_in, &
                                           alpha, beta, g, state, inside)
   end subroutine evaluate_at_point
+
+
+  subroutine check_atmosphere_projection(label, radius, r_in, K_poly, l_ang, W_in, &
+                                         alpha, beta, g, state_center, failures)
+    character(len=*), intent(in) :: label
+    real*8, intent(in) :: radius, r_in, K_poly, l_ang, W_in
+    real*8, intent(in) :: alpha, beta(3), g(3,3), state_center(neq)
+    integer, intent(inout) :: failures
+    real*8 :: center_enthalpy, target_enthalpy, target_density, target_pressure
+    real*8 :: projected_W_in, state_surface(neq)
+    logical :: inside
+    integer :: sample
+
+    center_enthalpy = 1.0d0 + K_poly*adb_idx/(adb_idx-1.0d0) * &
+                      state_center(eq_de)**(adb_idx-1.0d0)
+
+    do sample = 1, 2
+      if (sample == 1) then
+        target_density = 0.5d0*rho_floor
+      else
+        target_density = 10.0d0*rho_floor
+      end if
+      target_pressure = K_poly*target_density**adb_idx
+      target_enthalpy = 1.0d0 + K_poly*adb_idx/(adb_idx-1.0d0) * &
+                        target_density**(adb_idx-1.0d0)
+      projected_W_in = W_in - log(center_enthalpy) + log(target_enthalpy)
+
+      call assert_true(trim(label)//' projection test setup', &
+                       target_density < rho_floor .or. target_pressure < p_floor, &
+                       failures)
+      call evaluate_fishbone_moncrief_state(radius, r_in, K_poly, l_ang, projected_W_in, &
+                                            alpha, beta, g, state_surface, inside)
+      call assert_true(trim(label)//' subfloor cell is atmosphere', .not. inside, failures)
+      call assert_true(trim(label)//' subfloor cell uses exact floors', &
+                       state_surface(eq_de) == rho_floor .and. &
+                       state_surface(eq_pr) == p_floor, failures)
+      call assert_true(trim(label)//' subfloor atmosphere has zero velocity', &
+                       all(state_surface(eq_vx:eq_vz) == 0.0d0), failures)
+    end do
+  end subroutine check_atmosphere_projection
 
 
   subroutine check_specific_angular_momentum(label, state, alpha, beta, g, expected, failures)

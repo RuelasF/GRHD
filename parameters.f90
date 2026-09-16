@@ -248,6 +248,8 @@ contains
         call parse_real_value(value, khi_perturbation_amplitude, file_name, line_number)
       case('khi_perturbation_wave_number')
         call parse_real_value(value, khi_perturbation_wave_number, file_name, line_number)
+      case('khi_perturbation_width')
+        call parse_real_value(value, khi_perturbation_width, file_name, line_number)
       case('jet_ambient_density')
         call parse_real_value(value, jet_ambient_density, file_name, line_number)
       case('jet_ambient_pressure')
@@ -331,6 +333,10 @@ contains
         call parse_logical_value(value, do_ppi_diagnostics, file_name, line_number)
       case('diagnostic_stride')
         call parse_integer_value(value, diagnostic_stride, file_name, line_number)
+      case('extraction_stride')
+        call parse_integer_value(value, extraction_stride, file_name, line_number)
+      case('mass_monitor_stride')
+        call parse_integer_value(value, mass_monitor_stride, file_name, line_number)
       case('perturbation')
         call parse_perturbation(value, perturbation_type, file_name, line_number)
         apply_perturbation = (perturbation_type /= PERT_NONE)
@@ -373,8 +379,13 @@ contains
     if (r_max <= r_min) then
       call parameter_error(file_name, 0, 'r_max debe ser mayor que r_min')
     end if
-    if (use_log_r .and. r_min <= 0.0d0) then
-      call parameter_error(file_name, 0, 'una malla radial logaritmica requiere r_min > 0')
+    if (use_log_r .and. .not. is_polar_geometry(geom_type)) then
+      call parameter_error(file_name, 0, &
+                           'la malla radial logaritmica requiere geometria spherical o spheroidal')
+    end if
+    if (is_polar_geometry(geom_type) .and. r_min <= 0.0d0) then
+      call parameter_error(file_name, 0, &
+                           'las geometrias spherical y spheroidal requieren r_min > 0')
     end if
     if (adb_idx <= 1.0d0) then
       call parameter_error(file_name, 0, 'adiabatic_index debe ser mayor que 1')
@@ -394,7 +405,8 @@ contains
         vtk_mapping_id /= VTK_MAP_UNTWISTED) then
       call parameter_error(file_name, 0, 'identificador de mapeo VTK invalido')
     end if
-    if (diagnostic_stride < 1 .or. perturbation_seed < 0 .or. &
+    if (diagnostic_stride < 1 .or. extraction_stride < 1 .or. &
+        mass_monitor_stride < 0 .or. perturbation_seed < 0 .or. &
         perturbation_time < 0.0d0 .or. perturbation_amplitude < 0.0d0 .or. &
         perturbation_amplitude >= 1.0d0) then
       call parameter_error(file_name, 0, &
@@ -411,15 +423,27 @@ contains
       call parameter_error(file_name, 0, 'identificador de limitador TVD invalido')
     end if
 
+    ! Compatibilidad de transición para archivos .par y checkpoints anteriores.
+    ! A partir de aquí toda corrida KS queda identificada como esferoidal.
+    if (trim(metric_type) == 'Kerr-Schild' .and. trim(geom_type) == 'Spherical') then
+      write(*,'(A)') 'WARNING: geometry=spherical para Kerr-Schild esta obsoleto; se normaliza a spheroidal.'
+      geom_type = 'Spheroidal'
+    end if
+
     select case(trim(metric_type))
     case('Minkowski')
       if (abs(a_spin) > 0.0d0) then
         call parameter_error(file_name, 0, &
                              'Minkowski requiere spin = 0')
       end if
-      if (trim(geom_type) /= 'Cartesian' .and. trim(geom_type) /= 'Cylindrical') then
+      if (abs(bh_mass) > 0.0d0) then
         call parameter_error(file_name, 0, &
-                             'Minkowski solo esta implementada en geometria cartesiana o cilindrica')
+                             'Minkowski requiere bh_mass = 0')
+      end if
+      if (trim(geom_type) /= 'Cartesian' .and. trim(geom_type) /= 'Cylindrical' .and. &
+          trim(geom_type) /= 'Spherical') then
+        call parameter_error(file_name, 0, &
+                             'Minkowski requiere geometria cartesian, cylindrical o spherical')
       end if
     case('Eddington-Finkelstein')
       if (abs(a_spin) > 0.0d0) then
@@ -431,9 +455,9 @@ contains
                              'Eddington-Finkelstein requiere bh_mass > 0 y geometria spherical')
       end if
     case('Kerr-Schild')
-      if (bh_mass <= 0.0d0 .or. trim(geom_type) /= 'Spherical') then
+      if (bh_mass <= 0.0d0 .or. trim(geom_type) /= 'Spheroidal') then
         call parameter_error(file_name, 0, &
-                             'Kerr-Schild requiere bh_mass > 0 y geometria spherical')
+                             'Kerr-Schild requiere bh_mass > 0 y geometria spheroidal')
       end if
       spin_tolerance = 64.0d0 * epsilon(1.0d0) * max(1.0d0, bh_mass)
       if (abs(a_spin) > bh_mass + spin_tolerance) then
@@ -443,7 +467,7 @@ contains
       call parameter_error(file_name, 0, 'metrica interna invalida')
     end select
 
-    if (trim(geom_type) == 'Spherical') then
+    if (is_polar_geometry(geom_type)) then
       if (y_min < 0.0d0 .or. y_max > pi .or. y_max <= y_min) then
         call parameter_error(file_name, 0, &
                              'se requiere 0 <= theta_min < theta_max <= 1 (en unidades de pi)')
@@ -497,7 +521,9 @@ contains
           khi_pressure <= 0.0d0 .or. abs(khi_vx_inner) >= 1.0d0 .or. &
           abs(khi_vx_outer) >= 1.0d0 .or. khi_perturbation_amplitude < 0.0d0 .or. &
           khi_perturbation_amplitude >= 1.0d0 .or. &
-          khi_perturbation_wave_number <= 0.0d0) then
+          khi_perturbation_wave_number <= 0.0d0 .or. &
+          khi_perturbation_width <= 0.0d0 .or. &
+          max(khi_vx_inner**2, khi_vx_outer**2) + khi_perturbation_amplitude**2 >= 1.0d0) then
         call parameter_error(file_name, 0, 'parametros invalidos para Kelvin-Helmholtz')
       end if
     case(5)
@@ -577,6 +603,7 @@ contains
       ieee_is_finite(khi_vx_inner), ieee_is_finite(khi_vx_outer), &
       ieee_is_finite(khi_pressure), ieee_is_finite(khi_perturbation_amplitude), &
       ieee_is_finite(khi_perturbation_wave_number), &
+      ieee_is_finite(khi_perturbation_width), &
       ieee_is_finite(jet_ambient_density), ieee_is_finite(jet_ambient_pressure), &
       ieee_is_finite(jet_ambient_velocity), ieee_is_finite(jet_nozzle_radius), &
       ieee_is_finite(jet_nozzle_length), ieee_is_finite(jet_density), &
@@ -606,7 +633,7 @@ contains
                                     'Geometria:', trim(geom_type)
     write(*,'(A,3(I0,1X))') 'Malla nx ny nz: ', nx, ny, nz
     write(*,'(A,2(ES13.5,1X))') 'r_min r_max: ', r_min, r_max
-    if (trim(geom_type) == 'Spherical') then
+    if (is_polar_geometry(geom_type)) then
       write(*,'(A,2(F10.6,1X))') 'theta_min theta_max [pi]: ', y_min/pi, y_max/pi
       write(*,'(A,2(F10.6,1X))') 'phi_min phi_max [pi]: ', z_min/pi, z_max/pi
     end if
@@ -634,9 +661,10 @@ contains
         shu_rho_left, shu_pressure_left, shu_rho_right, shu_rho_amplitude, &
         shu_wave_number, shu_pressure_right
     case(4)
-      write(*,'(A,8(ES12.4,1X))') 'IC KHI: width rhoi rhoo vxi vxo p A kpi: ', &
+      write(*,'(A,9(ES12.4,1X))') 'IC KHI: halfwidth rhoi rhoo vxi vxo p A kpi sigma: ', &
         khi_half_width, khi_rho_inner, khi_rho_outer, khi_vx_inner, khi_vx_outer, &
-        khi_pressure, khi_perturbation_amplitude, khi_perturbation_wave_number
+        khi_pressure, khi_perturbation_amplitude, khi_perturbation_wave_number, &
+        khi_perturbation_width
     case(5)
       write(*,'(A,8(ES12.4,1X))') 'IC Jet: rhoa pa va R L rhoj pj vj: ', &
         jet_ambient_density, jet_ambient_pressure, jet_ambient_velocity, &
@@ -693,6 +721,7 @@ contains
          'checkpoint_interval', 'output_prefix', 'output_folder', 'vtk_mapping', &
          'shock_sensor', &
          'extract_gw', 'extract_mdot', 'ppi_diagnostics', 'diagnostic_stride', &
+         'extraction_stride', 'mass_monitor_stride', &
          'perturbation', 'perturbation_seed', 'perturbation_time', &
          'perturbation_amplitude', 'perturbation_mode')
       is_restart_control = .true.
@@ -926,6 +955,8 @@ contains
       value = 'Cylindrical'
     case('spherical')
       value = 'Spherical'
+    case('spheroidal')
+      value = 'Spheroidal'
     case default
       call parameter_error(file_name, line_number, 'geometria desconocida: '//trim(text))
     end select

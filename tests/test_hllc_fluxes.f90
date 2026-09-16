@@ -116,7 +116,7 @@ contains
     real*8 :: q(neq), g(3,3), beta(3), alpha, sqg
     real*8 :: numerical(neq), exact(neq)
 
-    call configure_metric('Kerr-Schild', 'Spherical')
+    call configure_metric('Kerr-Schild', 'Spheroidal')
     g = reshape((/ 2.0d0, 0.08d0, -0.35d0, &
                    0.08d0, 1.5d0, 0.10d0, &
                   -0.35d0, 0.10d0, 3.0d0 /), shape(g))
@@ -169,7 +169,7 @@ contains
     integer, intent(inout) :: failures
     real*8 :: q_L(neq), q_R(neq), g(3,3), beta(3), numerical(neq), exact(neq)
 
-    call configure_metric('Kerr-Schild', 'Spherical')
+    call configure_metric('Kerr-Schild', 'Spheroidal')
     call set_identity_metric(g)
     beta = (/ 0.30d0, 0.0d0, 0.0d0 /)
     q_L = (/ 1.0d0, 0.1d0, 0.2d0, 0.03d0, -0.02d0 /)
@@ -201,7 +201,7 @@ contains
     integer, intent(inout) :: failures
     real*8 :: q_L(neq), q_R(neq), g(3,3), beta(3), numerical(neq), exact(neq), sqg
 
-    call configure_metric('Kerr-Schild', 'Spherical')
+    call configure_metric('Kerr-Schild', 'Spheroidal')
     g = 0.0d0
     g(1,1) = 2.2d0
     g(2,2) = 1.4d0
@@ -223,7 +223,7 @@ contains
     integer, intent(inout) :: failures
     real*8 :: q_L(neq), q_R(neq), g(3,3), beta(3), numerical(neq), exact(neq), sqg
 
-    call configure_metric('Kerr-Schild', 'Spherical')
+    call configure_metric('Kerr-Schild', 'Spheroidal')
     g = reshape((/ 2.0d0, 0.08d0, -0.35d0, &
                    0.08d0, 1.5d0, 0.10d0, &
                   -0.35d0, 0.10d0, 3.0d0 /), shape(g))

@@ -48,7 +48,7 @@ contains
 
   subroutine write_run_manifest()
     integer :: unit_file
-    character(len=256) :: file_name
+    character(len=512) :: file_name
     real*8 :: manifest_spin
 
     file_name = trim(output_folder) // '/' // trim(scheme_name) // '/run_manifest.txt'
@@ -80,6 +80,8 @@ contains
     write(unit_file, '(A,ES24.16E3)') 'cfl=', CFL
     write(unit_file, '(A,L1)') 'ppi_diagnostics=', do_ppi_diagnostics
     write(unit_file, '(A,I0)') 'diagnostic_stride=', diagnostic_stride
+    write(unit_file, '(A,I0)') 'extraction_stride=', extraction_stride
+    write(unit_file, '(A,I0)') 'mass_monitor_stride=', mass_monitor_stride
     if (do_gw_extraction) then
       write(unit_file, '(A)') 'gw_method=Finn-Evans weak-field stress proxy'
       write(unit_file, '(A)') 'gw_observer_axis=positive-z'
@@ -98,6 +100,7 @@ contains
     write(unit_file, '(A,ES24.16E3)') 'perturbation_time=', perturbation_time
     write(unit_file, '(A,ES24.16E3)') 'perturbation_amplitude=', perturbation_amplitude
     write(unit_file, '(A,ES24.16E3)') 'perturbation_mode=', perturbation_mode
+    call write_initial_parameters_manifest(unit_file)
     write(unit_file, '(A)') '[/run]'
     close(unit_file)
   end subroutine write_run_manifest
@@ -106,7 +109,7 @@ contains
   subroutine initialize_auxiliary_output(replace_existing)
     logical, intent(in) :: replace_existing
     integer :: exit_status
-    character(len=256) :: directory, file_name
+    character(len=512) :: directory, file_name
 
     directory = trim(output_folder) // '/' // trim(scheme_name)
     call execute_command_line('mkdir -p "' // trim(directory) // '"', &
@@ -152,7 +155,7 @@ contains
     character(len=*), intent(in) :: file_name
     integer :: i, j, k, unit_file, io_status
     integer :: nx_points, ny_points, nz_points, n_points
-    character(len=150) :: full_path
+    character(len=512) :: full_path
     character(len=100) :: header_line
     real*8, allocatable :: pts_buffer(:,:,:,:)
     real*8 :: r_phys, theta_point, phi_point
@@ -163,11 +166,11 @@ contains
     geometry_spin = 0.0d0
     if (trim(metric_type) == 'Kerr-Schild') geometry_spin = a_spin
 
-    ! Una esfera completa no puede representarse con hexaedros estructurados
-    ! regulares en los polos: allí distintos índices azimutales ocupan el mismo
-    ! punto y VisIt puede producir nudos al cortar esas celdas degeneradas.
+    ! Un dominio angular polar completo no puede representarse con hexaedros
+    ! estructurados regulares en los polos: allí distintos índices azimutales
+    ! ocupan el mismo punto y VisIt puede producir nudos al cortar esas celdas.
     topology_tolerance = 128.0d0 * epsilon(1.0d0)
-    use_polar_unstructured_grid = trim(geom_type) == 'Spherical' .and. &
+    use_polar_unstructured_grid = is_polar_geometry(geom_type) .and. &
       ny > 1 .and. nz > 1 .and. &
       abs(y_face(0)) <= topology_tolerance .and. &
       abs(y_face(ny) - pi) <= topology_tolerance * max(1.0d0, abs(pi)) .and. &
@@ -175,7 +178,7 @@ contains
         topology_tolerance * max(1.0d0, abs(2.0d0*pi))
 
     if (use_polar_unstructured_grid) then
-      call save_vtk_spherical_unstructured(file_name, geometry_spin)
+      call save_vtk_polar_unstructured(file_name, geometry_spin)
       return
     end if
 
@@ -238,9 +241,9 @@ contains
           end if
 
           select case(trim(geom_type))
-            case('Spherical')
-              call vtk_spherical_position(r_phys, theta_point, phi_point, &
-                                           geometry_spin, cartesian_position)
+            case('Spherical', 'Spheroidal')
+              call vtk_polar_position(r_phys, theta_point, phi_point, &
+                                      geometry_spin, cartesian_position)
               pts_buffer(:, i, j, k) = cartesian_position
 
             case('Cylindrical')
@@ -266,7 +269,7 @@ contains
   end subroutine save_vtk_data
 
 
-  subroutine save_vtk_spherical_unstructured(file_name, geometry_spin)
+  subroutine save_vtk_polar_unstructured(file_name, geometry_spin)
     character(len=*), intent(in) :: file_name
     real*8, intent(in) :: geometry_spin
     integer :: i, j, k, k_next, point_id, cell_id, offset
@@ -275,7 +278,7 @@ contains
     integer(kind=4), allocatable :: cell_buffer(:), cell_types(:)
     real*8, allocatable :: point_buffer(:,:)
     real*8 :: r_phys, position(3)
-    character(len=150) :: full_path
+    character(len=512) :: full_path
     character(len=100) :: header_line
 
     ! Hay nz puntos por anillo: la conectividad periódica une el último con el
@@ -297,22 +300,22 @@ contains
       end if
 
       north_id(i) = point_id
-      call vtk_spherical_position(r_phys, 0.0d0, z_face(0), geometry_spin, position)
+      call vtk_polar_position(r_phys, 0.0d0, z_face(0), geometry_spin, position)
       point_buffer(:, point_id + 1) = position
       point_id = point_id + 1
 
       do k = 0, nz - 1
         do j = 1, ny - 1
           ring_id(i, j, k) = point_id
-          call vtk_spherical_position(r_phys, y_face(j), z_face(k), &
-                                      geometry_spin, position)
+          call vtk_polar_position(r_phys, y_face(j), z_face(k), &
+                                  geometry_spin, position)
           point_buffer(:, point_id + 1) = position
           point_id = point_id + 1
         end do
       end do
 
       south_id(i) = point_id
-      call vtk_spherical_position(r_phys, pi, z_face(0), geometry_spin, position)
+      call vtk_polar_position(r_phys, pi, z_face(0), geometry_spin, position)
       point_buffer(:, point_id + 1) = position
       point_id = point_id + 1
     end do
@@ -389,7 +392,7 @@ contains
     call write_vtk_cell_data(unit_file)
     close(unit_file)
     deallocate(point_buffer, ring_id, north_id, south_id, cell_buffer, cell_types)
-  end subroutine save_vtk_spherical_unstructured
+  end subroutine save_vtk_polar_unstructured
 
 
   subroutine write_vtk_cell_data(unit_file)
@@ -452,7 +455,7 @@ contains
 
   subroutine save_vtk_at_time(current_time)
     real*8, intent(in) :: current_time
-    character(len=50) :: file_name
+    character(len=512) :: file_name
     integer :: frame_id
 
     if (save_interval > 0.0d0) then
@@ -473,10 +476,11 @@ contains
     integer, intent(in) :: step_num
     real*8, intent(in) :: current_time
     integer :: unit_file, io_status
-    character(len=100) :: file_name
-    character(len=12), parameter :: checkpoint_magic = 'GRHDCP_V3'
+    character(len=512) :: file_name
+    character(len=12), parameter :: checkpoint_magic = 'GRHDCP_V4'
 
-    write(file_name, '(A, "/checkpoint_", A, "_", I5.5, ".rst")') trim(output_folder), trim(scheme_name), int(current_time)
+    write(file_name, '(A, "/checkpoint_", A, "_step_", I9.9, ".rst")') &
+      trim(output_folder), trim(scheme_name), step_num
     print *, '>>> Guardando Checkpoint de Respaldo: ', trim(file_name)
 
     unit_file = 20
@@ -503,6 +507,11 @@ contains
       write(unit_file) case_id, case_name, scheme_name
       write(unit_file) rec_method_id, tvd_limiter_id, riemann_solver_id
 
+      ! V4 conserva los parámetros específicos que definen datos iniciales y
+      ! fronteras. Son necesarios para reinicios reproducibles de Jet, Michel
+      ! y Dust, y para documentar exactamente cualquier otro caso.
+      call write_checkpoint_initial_parameters(unit_file)
+
       ! Estado reproducible de la perturbación y frecuencia de diagnóstico
       write(unit_file) apply_perturbation, perturbation_applied
       write(unit_file) perturbation_type, perturbation_seed, diagnostic_stride
@@ -523,15 +532,17 @@ contains
   subroutine read_checkpoint_metadata(unit_file)
     integer, intent(in) :: unit_file
     integer :: io_status
-    logical :: is_v2, is_v3, is_versioned
+    logical :: is_v2, is_v3, is_v4, is_versioned
     character(len=12) :: checkpoint_magic
     character(len=12), parameter :: checkpoint_magic_v2 = 'GRHDCP_V2'
     character(len=12), parameter :: checkpoint_magic_v3 = 'GRHDCP_V3'
+    character(len=12), parameter :: checkpoint_magic_v4 = 'GRHDCP_V4'
 
     read(unit_file, iostat=io_status) checkpoint_magic
     is_v2 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v2)
     is_v3 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v3)
-    is_versioned = is_v2 .or. is_v3
+    is_v4 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v4)
+    is_versioned = is_v2 .or. is_v3 .or. is_v4
     if (.not. is_versioned) rewind(unit_file)
 
     ! Topología de malla
@@ -548,7 +559,7 @@ contains
       a_spin = 0.0d0
       print *, 'WARNING: legacy checkpoint has no Kerr spin; assuming a = 0.'
     end if
-    if (is_v3) then
+    if (is_v3 .or. is_v4) then
       read(unit_file) use_log_r, use_shock_sensor, do_gw_extraction, &
                       do_mdot_extraction, do_ppi_diagnostics
     else
@@ -565,7 +576,13 @@ contains
     read(unit_file) case_id, case_name, scheme_name
     read(unit_file) rec_method_id, tvd_limiter_id, riemann_solver_id
 
-    if (is_v3) then
+    if (is_v4) then
+      call read_checkpoint_initial_parameters(unit_file)
+    else if (case_id == 5 .or. case_id == 7 .or. case_id == 8) then
+      write(*,'(A)') 'WARNING: legacy checkpoint lacks case-specific boundary parameters; using defaults.'
+    end if
+
+    if (is_v3 .or. is_v4) then
       read(unit_file) apply_perturbation, perturbation_applied
       read(unit_file) perturbation_type, perturbation_seed, diagnostic_stride
       read(unit_file) perturbation_time, perturbation_amplitude, perturbation_mode
@@ -586,6 +603,138 @@ contains
     ! dinámicamente con nx, ny, nz leídos en la metadata antes de llegar aquí.
     read(unit_file) up
   end subroutine read_checkpoint_state
+
+  subroutine write_checkpoint_initial_parameters(unit_file)
+    integer, intent(in) :: unit_file
+
+    write(unit_file) sod_interface, sod_rho_left, sod_rho_right, &
+      sod_pressure_left, sod_pressure_right
+    write(unit_file) strong_interface, strong_rho_left, strong_rho_right, &
+      strong_pressure_left, strong_pressure_right
+    write(unit_file) shu_interface, shu_rho_left, shu_pressure_left, &
+      shu_rho_right, shu_rho_amplitude, shu_wave_number, shu_pressure_right
+    write(unit_file) khi_half_width, khi_rho_inner, khi_rho_outer, &
+      khi_vx_inner, khi_vx_outer, khi_pressure, khi_perturbation_amplitude, &
+      khi_perturbation_wave_number, khi_perturbation_width
+    write(unit_file) jet_ambient_density, jet_ambient_pressure, &
+      jet_ambient_velocity, jet_nozzle_radius, jet_nozzle_length, &
+      jet_density, jet_pressure, jet_velocity
+    write(unit_file) advected_wave_density, advected_wave_amplitude, &
+      advected_wave_speed, advected_wave_pressure, advected_wave_number
+    write(unit_file) michel_critical_radius, michel_critical_density, &
+      dust_accretion_constant
+    write(unit_file) offaxis_radial_center, offaxis_phi_center, offaxis_width, &
+      offaxis_background_density, offaxis_background_pressure, &
+      offaxis_density_amplitude, offaxis_pressure_amplitude
+    write(unit_file) fm_inner_radius, fm_pressure_max_radius, &
+      fm_polytropic_constant
+  end subroutine write_checkpoint_initial_parameters
+
+
+  subroutine read_checkpoint_initial_parameters(unit_file)
+    integer, intent(in) :: unit_file
+
+    read(unit_file) sod_interface, sod_rho_left, sod_rho_right, &
+      sod_pressure_left, sod_pressure_right
+    read(unit_file) strong_interface, strong_rho_left, strong_rho_right, &
+      strong_pressure_left, strong_pressure_right
+    read(unit_file) shu_interface, shu_rho_left, shu_pressure_left, &
+      shu_rho_right, shu_rho_amplitude, shu_wave_number, shu_pressure_right
+    read(unit_file) khi_half_width, khi_rho_inner, khi_rho_outer, &
+      khi_vx_inner, khi_vx_outer, khi_pressure, khi_perturbation_amplitude, &
+      khi_perturbation_wave_number, khi_perturbation_width
+    read(unit_file) jet_ambient_density, jet_ambient_pressure, &
+      jet_ambient_velocity, jet_nozzle_radius, jet_nozzle_length, &
+      jet_density, jet_pressure, jet_velocity
+    read(unit_file) advected_wave_density, advected_wave_amplitude, &
+      advected_wave_speed, advected_wave_pressure, advected_wave_number
+    read(unit_file) michel_critical_radius, michel_critical_density, &
+      dust_accretion_constant
+    read(unit_file) offaxis_radial_center, offaxis_phi_center, offaxis_width, &
+      offaxis_background_density, offaxis_background_pressure, &
+      offaxis_density_amplitude, offaxis_pressure_amplitude
+    read(unit_file) fm_inner_radius, fm_pressure_max_radius, &
+      fm_polytropic_constant
+  end subroutine read_checkpoint_initial_parameters
+
+
+  subroutine write_initial_parameters_manifest(unit_file)
+    integer, intent(in) :: unit_file
+
+    select case(case_id)
+    case(1)
+      call manifest_real(unit_file, 'sod_interface', sod_interface)
+      call manifest_real(unit_file, 'sod_density_left', sod_rho_left)
+      call manifest_real(unit_file, 'sod_density_right', sod_rho_right)
+      call manifest_real(unit_file, 'sod_pressure_left', sod_pressure_left)
+      call manifest_real(unit_file, 'sod_pressure_right', sod_pressure_right)
+    case(2)
+      call manifest_real(unit_file, 'strong_interface', strong_interface)
+      call manifest_real(unit_file, 'strong_density_left', strong_rho_left)
+      call manifest_real(unit_file, 'strong_density_right', strong_rho_right)
+      call manifest_real(unit_file, 'strong_pressure_left', strong_pressure_left)
+      call manifest_real(unit_file, 'strong_pressure_right', strong_pressure_right)
+    case(3)
+      call manifest_real(unit_file, 'shu_interface', shu_interface)
+      call manifest_real(unit_file, 'shu_density_left', shu_rho_left)
+      call manifest_real(unit_file, 'shu_pressure_left', shu_pressure_left)
+      call manifest_real(unit_file, 'shu_density_right', shu_rho_right)
+      call manifest_real(unit_file, 'shu_density_amplitude', shu_rho_amplitude)
+      call manifest_real(unit_file, 'shu_wave_number', shu_wave_number)
+      call manifest_real(unit_file, 'shu_pressure_right', shu_pressure_right)
+    case(4)
+      call manifest_real(unit_file, 'khi_half_width', khi_half_width)
+      call manifest_real(unit_file, 'khi_density_inner', khi_rho_inner)
+      call manifest_real(unit_file, 'khi_density_outer', khi_rho_outer)
+      call manifest_real(unit_file, 'khi_velocity_inner', khi_vx_inner)
+      call manifest_real(unit_file, 'khi_velocity_outer', khi_vx_outer)
+      call manifest_real(unit_file, 'khi_pressure', khi_pressure)
+      call manifest_real(unit_file, 'khi_perturbation_amplitude', khi_perturbation_amplitude)
+      call manifest_real(unit_file, 'khi_perturbation_wave_number', khi_perturbation_wave_number)
+      call manifest_real(unit_file, 'khi_perturbation_width', khi_perturbation_width)
+    case(5)
+      call manifest_real(unit_file, 'jet_ambient_density', jet_ambient_density)
+      call manifest_real(unit_file, 'jet_ambient_pressure', jet_ambient_pressure)
+      call manifest_real(unit_file, 'jet_ambient_velocity', jet_ambient_velocity)
+      call manifest_real(unit_file, 'jet_nozzle_radius', jet_nozzle_radius)
+      call manifest_real(unit_file, 'jet_nozzle_length', jet_nozzle_length)
+      call manifest_real(unit_file, 'jet_density', jet_density)
+      call manifest_real(unit_file, 'jet_pressure', jet_pressure)
+      call manifest_real(unit_file, 'jet_velocity', jet_velocity)
+    case(6)
+      call manifest_real(unit_file, 'convergence_density', advected_wave_density)
+      call manifest_real(unit_file, 'convergence_amplitude', advected_wave_amplitude)
+      call manifest_real(unit_file, 'convergence_speed', advected_wave_speed)
+      call manifest_real(unit_file, 'convergence_pressure', advected_wave_pressure)
+      call manifest_real(unit_file, 'convergence_wave_number', advected_wave_number)
+    case(7)
+      call manifest_real(unit_file, 'michel_critical_radius', michel_critical_radius)
+      call manifest_real(unit_file, 'michel_critical_density', michel_critical_density)
+    case(8)
+      call manifest_real(unit_file, 'dust_accretion_constant', dust_accretion_constant)
+    case(9)
+      call manifest_real(unit_file, 'offaxis_radial_center', offaxis_radial_center)
+      call manifest_real(unit_file, 'offaxis_phi_center', offaxis_phi_center)
+      call manifest_real(unit_file, 'offaxis_width', offaxis_width)
+      call manifest_real(unit_file, 'offaxis_background_density', offaxis_background_density)
+      call manifest_real(unit_file, 'offaxis_background_pressure', offaxis_background_pressure)
+      call manifest_real(unit_file, 'offaxis_density_amplitude', offaxis_density_amplitude)
+      call manifest_real(unit_file, 'offaxis_pressure_amplitude', offaxis_pressure_amplitude)
+    case(10:12)
+      call manifest_real(unit_file, 'fm_inner_radius', fm_inner_radius)
+      call manifest_real(unit_file, 'fm_pressure_max_radius', fm_pressure_max_radius)
+      call manifest_real(unit_file, 'fm_polytropic_constant', fm_polytropic_constant)
+    end select
+  end subroutine write_initial_parameters_manifest
+
+
+  subroutine manifest_real(unit_file, key, value)
+    integer, intent(in) :: unit_file
+    character(len=*), intent(in) :: key
+    real*8, intent(in) :: value
+
+    write(unit_file,'(A,A,ES24.16E3)') trim(key), '=', value
+  end subroutine manifest_real
 
   ! ===================================================================================
   ! 3. EXTRACCIÓN DE OBSERVABLES FÍSICOS (Física de Agujeros Negros)
@@ -619,7 +768,7 @@ contains
   end subroutine kerr_schild_spheroidal_position
 
 
-  subroutine vtk_spherical_position(r_phys, theta, phi, spin, position)
+  subroutine vtk_polar_position(r_phys, theta, phi, spin, position)
     real*8, intent(in) :: r_phys, theta, phi, spin
     real*8, intent(out) :: position(3)
     real*8 :: sin_theta, cos_theta, cylindrical_radius
@@ -643,7 +792,7 @@ contains
     position(1) = cylindrical_radius * cos(phi)
     position(2) = cylindrical_radius * sin(phi)
     position(3) = r_phys * cos_theta
-  end subroutine vtk_spherical_position
+  end subroutine vtk_polar_position
 
   pure subroutine gw_cartesian_kinematics(r_phys, theta, phi, spin, alpha, beta, &
                                           eulerian_velocity, logarithmic_r, &
@@ -790,7 +939,7 @@ contains
     h_cross = (2.0d0 * Ixy_ddot) / gw_observer_distance
 
     block
-      character(len=150) :: gw_filename
+      character(len=512) :: gw_filename
       gw_filename = trim(output_folder) //  '/' // trim(scheme_name) // '/GW_signal.dat'
       open(30, file=gw_filename, position='append', status='unknown')
       write(30, '(3(E15.7, 2X))') current_time, h_plus, h_cross
@@ -834,7 +983,7 @@ contains
     m_dot = - m_dot 
 
     block
-      character(len=150) :: m_dot_filename
+      character(len=512) :: m_dot_filename
       m_dot_filename = trim(output_folder) //  '/' // trim(scheme_name) // '/m_dot.dat'
       open(88, file=m_dot_filename, position='append', status='unknown')
       write(88, '(2(E15.7, 2X))') current_time, m_dot
@@ -850,7 +999,7 @@ contains
     real*8 :: cell_volume, density_cut, azimuthal_mass, mode_phase
     real*8 :: c0, c_real(PPI_MAX_MODE), c_imag(PPI_MAX_MODE)
     real*8 :: values(2 + 4 * PPI_MAX_MODE)
-    character(len=256) :: file_name
+    character(len=512) :: file_name
 
     if (.not. do_ppi_diagnostics .or. nz < 2) return
 
@@ -909,7 +1058,7 @@ contains
     real*8 :: mass_total, disk_mass, angular_momentum
     real*8 :: rho_minimum, pressure_minimum, rho_maximum, pressure_maximum
     real*8 :: max_velocity_squared
-    character(len=256) :: file_name
+    character(len=512) :: file_name
 
     if (.not. do_ppi_diagnostics) return
 
@@ -980,7 +1129,7 @@ contains
     implicit none
     real*8, intent(in) :: current_time
     integer :: unit_file
-    character(len=256) :: file_name
+    character(len=512) :: file_name
 
     if (.not. do_ppi_diagnostics) return
     file_name = trim(output_folder) // '/' // trim(scheme_name) // '/perturbation_events.dat'
@@ -995,15 +1144,17 @@ contains
   subroutine calc_convergence_norms()
     implicit none
     integer :: i, i_start, i_end, j_idx, unit_out, idx_max_err
-    real*8 :: rho_exact
+    real*8 :: rho_exact, dust_exact(neq)
     real*8 :: err_L1, err_L2, sum_L1, sum_L2
     real*8 :: err_Linf, diff, x_max_err
     real*8 :: sinc_factor, sinc_argument, celdas_validas, advected_coordinate
 
     real*8, allocatable :: p_conv(:,:,:,:)
-    character(len=256) :: file_name
+    character(len=512) :: file_name
+    logical :: file_exists
 
-    if (trim(case_name) /= 'Conv' .and. trim(case_name) /= 'MichelA') return
+    if (trim(case_name) /= 'Conv' .and. trim(case_name) /= 'MichelA' .and. &
+        trim(case_name) /= 'Dust') return
 
     sum_L1 = 0.0d0
     sum_L2 = 0.0d0
@@ -1035,7 +1186,7 @@ contains
         end if
       end do
       file_name = trim(output_folder) // '/convergence_' // trim(scheme_name) // '.dat'
-    else
+    else if (trim(case_name) == 'MichelA') then
       ! Michel conserva la comparación histórica en la región interior segura.
       allocate(p_conv(neq, 1:nx, 1:ny, 1:nz))
       call setup_michel_accretion_initial(p_conv, michel_critical_radius, &
@@ -1060,6 +1211,29 @@ contains
       end do
       deallocate(p_conv)
       file_name = trim(output_folder) // '/michel_convergence_' // trim(scheme_name) // '.dat'
+    else
+      ! La solución fría de caída libre también es estacionaria. Se excluyen
+      ! franjas junto a ambos bordes para medir el error del volumen interior.
+      i_start = max(1, int(0.10d0 * dble(nx)))
+      i_end = min(nx, max(i_start, int(0.95d0 * dble(nx))))
+      celdas_validas = dble(i_end - i_start + 1)
+      do i = i_start, i_end
+        call evaluate_dust_accretion_state(x(i), dust_exact)
+        rho_exact = dust_exact(eq_de)
+        diff = abs(p(eq_de, i, j_idx, 1) - rho_exact)
+        sum_L1 = sum_L1 + diff
+        sum_L2 = sum_L2 + diff**2
+        if (diff > err_Linf) then
+          err_Linf = diff
+          idx_max_err = i
+          if (use_log_r) then
+            x_max_err = exp(x(i))
+          else
+            x_max_err = x(i)
+          end if
+        end if
+      end do
+      file_name = trim(output_folder) // '/dust_convergence_' // trim(scheme_name) // '.dat'
     end if
 
     err_L1 = sum_L1 / celdas_validas
@@ -1074,12 +1248,9 @@ contains
     ! ====================================================================
     ! LÓGICA DE ESCRITURA INTELIGENTE
     ! ====================================================================
-    if (nx == 32) then
-      open(unit=unit_out, file=trim(file_name), status='replace')
-      write(unit_out, '(A)') '# N L1 L2 Linf'
-    else
-      open(unit=unit_out, file=trim(file_name), status='unknown', position='append')
-    end if
+    inquire(file=trim(file_name), exist=file_exists)
+    open(unit=unit_out, file=trim(file_name), status='unknown', position='append')
+    if (.not. file_exists) write(unit_out, '(A)') '# N L1 L2 Linf'
 
     write(unit_out, '(I6, 3(2X, E20.12))') nx, err_L1, err_L2, err_Linf
     close(unit_out)

@@ -63,14 +63,22 @@ contains
         call reconstruct_1d_core(prim_1d, nx, q_L_strip, q_R_strip, DIR_X)
         
         ! C. Cálculo de Flujos en las Interfaces (0 a nx)
-        do i = 0, nx 
-          ! Leer de la caché de la interfaz X (Mapeo: índice 0 físico -> índice 1 del arreglo de interfaz)
-          a    = alpha_f_x(i+1, j, k)
-          b(:) = beta_f_x(:, i+1, j, k)
-          g(:,:) = gamma_f_x(:, :, i+1, j, k)
-          sqg  = sqrt_gamma_f_x(i+1, j, k)
-          
-          call resolve_riemann_problem(q_L_strip(:,i), q_R_strip(:,i), DIR_X, a, b, g, sqg, flux_strip(:,i))
+        do i = 0, nx
+          ! La cara rho=0 del sistema cilíndrico tiene área nula y una métrica
+          ! coordenada degenerada. El flujo densitizado se fija exactamente a cero.
+          if (trim(geom_type) == 'Cylindrical' .and. &
+              abs(x_face(i)) <= 64.0d0*epsilon(1.0d0)) then
+            flux_strip(:,i) = 0.0d0
+          else
+            ! Leer de la caché de la interfaz X (índice de cara i -> caché i+1).
+            a    = alpha_f_x(i+1, j, k)
+            b(:) = beta_f_x(:, i+1, j, k)
+            g(:,:) = gamma_f_x(:, :, i+1, j, k)
+            sqg  = sqrt_gamma_f_x(i+1, j, k)
+
+            call resolve_riemann_problem(q_L_strip(:,i), q_R_strip(:,i), &
+                                         DIR_X, a, b, g, sqg, flux_strip(:,i))
+          end if
         end do
         
         ! D. Ensamblaje del RHS en los Centros Celulares (1 a nx)
@@ -107,11 +115,11 @@ contains
           call reconstruct_1d_core(prim_1d, ny, q_L_strip, q_R_strip, DIR_Y)
 
           ! C. Cálculo de Flujos (las interfaces caen en los bordes de celda en theta).
-          ! En coordenadas esféricas las caras theta=0,pi tienen área física nula:
+          ! En coordenadas polares las caras theta=0,pi tienen área física nula:
           ! el flujo densitizado sqrt(gamma) F^theta es exactamente cero. No se debe
           ! llamar al solver de Riemann allí porque gamma_ij es degenerada en el eje.
           do j = 0, ny
-            if (trim(geom_type) == 'Spherical' .and. &
+            if (is_polar_geometry(geom_type) .and. &
                 abs(sin(y_face(j))) <= 64.0d0*epsilon(1.0d0)) then
               flux_strip(:,j) = 0.0d0
             else

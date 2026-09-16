@@ -121,7 +121,7 @@ module variables
     ! ==========================================================
     ! BANDERAS DE CONTROL GLOBAL
     ! ==========================================================
-    character(len=20) :: geom_type               ! 'Cartesian', 'Cylindrical', 'Spherical'
+    character(len=20) :: geom_type               ! 'Cartesian', 'Cylindrical', 'Spherical', 'Spheroidal'
     logical :: use_log_r = .false.               ! .true. comprime 1ra dimensión
 
     character(len=30) :: metric_type             ! 'Minkowski', 'Eddington-Finkelstein', 'Kerr'
@@ -145,6 +145,8 @@ module variables
     integer :: perturbation_type = PERT_PRESSURE_NOISE
     integer :: perturbation_seed = 3435
     integer :: diagnostic_stride = 100
+    integer :: extraction_stride = 10
+    integer :: mass_monitor_stride = 1000
     real*8 :: perturbation_time = 1000.0d0
     real*8 :: perturbation_amplitude = 0.01d0
     real*8 :: perturbation_mode = 1.0d0
@@ -182,6 +184,7 @@ module variables
     real*8 :: khi_pressure = 2.5d0
     real*8 :: khi_perturbation_amplitude = 0.01d0
     real*8 :: khi_perturbation_wave_number = 10.0d0
+    real*8 :: khi_perturbation_width = 0.05d0
 
     ! Jet axisimétrico.
     real*8 :: jet_ambient_density = 10.0d0
@@ -244,7 +247,7 @@ module variables
     ! ==========================================================
     integer :: case_id 
     character(len=50) :: case_name 
-    character(len=50) :: output_folder 
+    character(len=256) :: output_folder
     character(len=50) :: output_prefix 
 
     ! El estado siempre se calcula en las coordenadas de la metrica. Esta
@@ -261,6 +264,15 @@ module variables
     real*8 :: checkpoint_interval = 100.0d0 
     real*8 :: next_checkpoint 
     logical :: do_restart = .false. 
-    character(len=100) :: restart_file = 'FishboneMoncrief_Equatorial_test/checkpoint_weno5_hlle_08800.rst' 
+    character(len=100) :: restart_file = 'FishboneMoncrief_Equatorial_test/checkpoint_weno5_hlle_08800.rst'
+
+contains
+
+  pure logical function is_polar_geometry(geometry_name)
+    character(len=*), intent(in) :: geometry_name
+
+    is_polar_geometry = trim(geometry_name) == 'Spherical' .or. &
+                        trim(geometry_name) == 'Spheroidal'
+  end function is_polar_geometry
 
 end module variables

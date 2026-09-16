@@ -15,7 +15,8 @@ module conditions
   public :: set_initial_conditions, set_boundary_conditions, &
     inject_pressure_noise, setup_michel_accretion_initial, &
     inject_density_mode, inject_density_noise, &
-    prepare_fishbone_moncrief, evaluate_fishbone_moncrief_state
+    prepare_fishbone_moncrief, evaluate_fishbone_moncrief_state, &
+    evaluate_dust_accretion_state, prepare_case_boundary_data
 
 contains
 
@@ -25,8 +26,9 @@ contains
   subroutine set_initial_conditions()
     integer :: i, j, k
     real*8  :: sinc_factor, sinc_argument
-    real*8  :: dist_sq, exponent, gauss_prof
-    real*8  :: x_pos, z_pos
+    real*8  :: dist_sq, exponent, gauss_prof, r_loc
+    real*8  :: x_pos, z_pos, interface_distance, perturbation_envelope
+    real*8  :: dust_state(neq)
 
     ! Limpieza de RAM: Previene que celdas fantasma contengan "basura" de ejecuciones previas
     p = 0.0d0
@@ -89,11 +91,13 @@ contains
             p(eq_pr, i, j, k) = khi_pressure
             p(eq_vy, i, j, k) = 0.0d0
 
-            ! Perturbación de velocidad para detonar los vórtices
-            p(eq_vx, i, j, k) = p(eq_vx, i, j, k) * &
-              (1.0d0 + khi_perturbation_amplitude * &
-               cos(khi_perturbation_wave_number * pi * x_pos) * &
-               cos(khi_perturbation_wave_number * pi * z_pos))
+            ! La perturbación debe ser transversal al flujo de cizalla. Se
+            ! localiza suavemente alrededor de las interfaces z=+-half_width.
+            interface_distance = abs(abs(z_pos) - khi_half_width)
+            perturbation_envelope = exp(-0.5d0 * &
+              (interface_distance/khi_perturbation_width)**2)
+            p(eq_vz, i, j, k) = khi_perturbation_amplitude * &
+              sin(khi_perturbation_wave_number*pi*x_pos) * perturbation_envelope
           end do
         end do
       end do
@@ -143,31 +147,31 @@ contains
       call setup_michel_accretion_initial(p(:, 1:nx+nghost, 1:ny, 1:nz), &
                                            michel_critical_radius, &
                                            michel_critical_density)
-      
-      ! Guardamos el estado asintótico en el borde externo para usarlo como inyector
-      if (.not. allocated(michel_injector)) allocate(michel_injector(neq, nghost, ny, nz))
-        
-      do k = 1, nz
-        do j = 1, ny
-          do i = 1, nghost
-            michel_injector(:, i, j, k) = p(:, nx+i, j, k)
+      call cache_michel_injector()
+    case('Dust', '8') ! Caída libre estacionaria desde el reposo en el infinito.
+      do i = 1, nx+nghost
+        call evaluate_dust_accretion_state(x(i), dust_state)
+        do k = -nghost, nz+nghost
+          do j = -nghost, ny+nghost
+            p(:,i,j,k) = dust_state
           end do
         end do
       end do
-
-    case('Dust', '8') ! Dust accretion (Acreción de polvo en caída libre, Presión = 0)
-      p(eq_de, :, :, :) = -dust_accretion_constant / &
-                           (r_max**2 * sqrt(2.0d0*bh_mass/r_max))
-      p(eq_vx, :, :, :) = -1.0d0 / &
-        (sqrt(1.0d0 + r_max/(2.0d0*bh_mass)) * &
-         (1.0d0 + sqrt(2.0d0*bh_mass/r_max) + 2.0d0*bh_mass/r_max))
+      do i = -nghost, 0
+        p(:,i,:,:) = p(:,1,:,:)
+      end do
 
     case('OffAxis', '9') ! Off-axis Blast Wave (Explosión asimétrica)
       do k = -nghost, nz+nghost
         do j = 1, ny
           do i = -nghost, nx+nghost
-            dist_sq = x(i)**2 + offaxis_radial_center**2 - &
-                      2.0d0 * offaxis_radial_center * x(i) * &
+            if (use_log_r) then
+              r_loc = exp(x(i))
+            else
+              r_loc = x(i)
+            end if
+            dist_sq = r_loc**2 + offaxis_radial_center**2 - &
+                      2.0d0 * offaxis_radial_center * r_loc * &
                       cos(z(k) - offaxis_phi_center)
             exponent = -dist_sq / (offaxis_width**2)
             
@@ -208,6 +212,70 @@ contains
       stop
     end select
   end subroutine set_initial_conditions
+
+
+  subroutine prepare_case_boundary_data()
+    ! Reconstruye datos auxiliares que no forman parte del estado conservado.
+    ! En particular, el inyector de Michel debe existir también al reiniciar.
+    select case(trim(case_name))
+    case('MichelA', '7')
+      call setup_michel_accretion_initial(p(:,1:nx+nghost,1:ny,1:nz), &
+        michel_critical_radius, michel_critical_density)
+      call cache_michel_injector()
+    end select
+  end subroutine prepare_case_boundary_data
+
+
+  subroutine cache_michel_injector()
+    integer :: i, j, k
+
+    if (allocated(michel_injector)) then
+      if (size(michel_injector,2) /= nghost .or. &
+          size(michel_injector,3) /= ny .or. &
+          size(michel_injector,4) /= nz) deallocate(michel_injector)
+    end if
+    if (.not. allocated(michel_injector)) allocate(michel_injector(neq,nghost,ny,nz))
+
+    do k = 1, nz
+      do j = 1, ny
+        do i = 1, nghost
+          michel_injector(:,i,j,k) = p(:,nx+i,j,k)
+        end do
+      end do
+    end do
+  end subroutine cache_michel_injector
+
+
+  subroutine evaluate_dust_accretion_state(radial_coordinate, prim_state)
+    implicit none
+    real*8, intent(in) :: radial_coordinate
+    real*8, intent(out) :: prim_state(neq)
+    real*8 :: r_loc, radial_jacobian, free_fall_speed
+
+    if (use_log_r) then
+      r_loc = exp(radial_coordinate)
+      radial_jacobian = r_loc
+    else
+      r_loc = radial_coordinate
+      radial_jacobian = 1.0d0
+    end if
+    if (r_loc <= 0.0d0 .or. bh_mass <= 0.0d0 .or. &
+        dust_accretion_constant >= 0.0d0) then
+      write(*,*) 'CRITICAL ERROR: invalid stationary dust-accretion parameters.'
+      error stop 1
+    end if
+
+    free_fall_speed = sqrt(2.0d0*bh_mass/r_loc)
+    prim_state = 0.0d0
+    prim_state(eq_de) = -dust_accretion_constant / (r_loc**2*free_fall_speed)
+    ! El código evoluciona un gas ideal: p_floor aproxima el límite frío p=0
+    ! sin entregar un estado inadmisible al recuperador de primitivas.
+    prim_state(eq_pr) = p_floor
+    prim_state(eq_vx) = -1.0d0 / &
+      (sqrt(1.0d0 + r_loc/(2.0d0*bh_mass)) * &
+       (1.0d0 + free_fall_speed + 2.0d0*bh_mass/r_loc))
+    prim_state(eq_vx) = prim_state(eq_vx) / radial_jacobian
+  end subroutine evaluate_dust_accretion_state
 
 
   ! ========================================================================
@@ -476,8 +544,12 @@ contains
     density = ((enthalpy - 1.0d0) * (adb_idx - 1.0d0) / &
                (K_poly * adb_idx))**(1.0d0 / (adb_idx - 1.0d0))
     pressure = K_poly * density**adb_idx
+    ! El problema discreto usa una atmósfera finita, no vacío. Una celda
+    ! analítica por debajo de cualquiera de los pisos debe conservar el estado
+    ! atmosférico completo inicializado arriba (incluidas velocidades nulas),
+    ! igual que hará posteriormente la recuperación conservativa-primitiva.
     if (.not. ieee_is_finite(density) .or. .not. ieee_is_finite(pressure) .or. &
-        density <= 0.0d0 .or. pressure <= 0.0d0) return
+        density <= rho_floor .or. pressure <= p_floor) return
 
     omega_denominator = g(3,3) + l_ang*g_tphi
     if (.not. ieee_is_finite(omega_denominator) .or. &
@@ -702,6 +774,20 @@ contains
     implicit none
     real*8, intent(inout) :: q_state(neq, -nghost:nx+nghost, -nghost:ny+nghost, -nghost:nz+nghost)
     integer :: i, j, k, g, k_shift
+    real*8 :: dust_state(neq)
+
+    select case(trim(case_name))
+    case('OffAxis', '9', 'FishMoncEqu', '10', 'FishMoncSag', '11', 'FishMonc3D', '12')
+      if (.not. allocated(alpha_c) .or. .not. allocated(beta_c)) then
+        write(*,*) 'CRITICAL ERROR: radial outflow boundaries require the metric cache.'
+        error stop 1
+      end if
+      if (size(alpha_c,1) < nx .or. size(alpha_c,2) < ny .or. size(alpha_c,3) < nz .or. &
+          size(beta_c,2) < nx .or. size(beta_c,3) < ny .or. size(beta_c,4) < nz) then
+        write(*,*) 'CRITICAL ERROR: metric cache dimensions do not match the fluid grid.'
+        error stop 1
+      end if
+    end select
 
     select case(trim(case_name))
 
@@ -804,7 +890,30 @@ contains
         q_state(:, :, :, nz+g) = q_state(:, :, :, g)
       end do
 
-    case('OffAxis', '9', 'FishMoncEqu', '10') 
+    case('Dust', '8')
+      ! El borde interno es de salida hacia el agujero negro. En el borde
+      ! externo se mantiene la solución analítica estacionaria como inyector.
+      do g = 1, nghost
+        call evaluate_dust_accretion_state(x(nx+g), dust_state)
+        do k = 1, nz
+          do j = 1, ny
+            q_state(:, 1-g, j, k) = q_state(:, 1, j, k)
+            q_state(eq_de, 1-g, j, k) = max(q_state(eq_de, 1, j, k), rho_floor)
+            q_state(eq_pr, 1-g, j, k) = max(q_state(eq_pr, 1, j, k), p_floor)
+            q_state(eq_vx, 1-g, j, k) = min(0.0d0, q_state(eq_vx, 1, j, k))
+            q_state(:, nx+g, j, k) = dust_state
+          end do
+        end do
+      end do
+
+      do g = 1, nghost
+        q_state(:, :, 1-g, :) = q_state(:, :, ny + 1 - g, :)
+        q_state(:, :, ny+g, :) = q_state(:, :, g, :)
+        q_state(:, :, :, 1-g) = q_state(:, :, :, nz + 1 - g)
+        q_state(:, :, :, nz+g) = q_state(:, :, :, g)
+      end do
+
+    case('OffAxis', '9', 'FishMoncEqu', '10')
       
       ! 1. Radial
       !$OMP PARALLEL DO PRIVATE(j, k, g)
@@ -814,12 +923,14 @@ contains
             q_state(:, 1-g, j, k) = q_state(:, 1, j, k) 
             q_state(eq_de, 1-g, j, k) = max(q_state(eq_de, 1, j, k), rho_floor)
             q_state(eq_pr, 1-g, j, k) = max(q_state(eq_pr, 1, j, k), p_floor)
-            q_state(eq_vx, 1-g, j, k) = min(0.0d0, q_state(eq_vx, 1-g, j, k))
+            q_state(eq_vx, 1-g, j, k) = min(beta_c(1,1,j,k)/alpha_c(1,j,k), &
+                                                     q_state(eq_vx, 1, j, k))
             if (q_state(eq_de, 1, j, k) < 1.0d-6) q_state(eq_vy:eq_vz, 1-g, j, k) = 0.0d0
 
             q_state(eq_de, nx+g, j, k) = max(q_state(eq_de, nx, j, k), rho_floor)
             q_state(eq_pr, nx+g, j, k) = max(q_state(eq_pr, nx, j, k), p_floor)
-            q_state(eq_vx, nx+g, j, k) = max(0.0d0, q_state(eq_vx, nx, j, k)) 
+            q_state(eq_vx, nx+g, j, k) = max(beta_c(1,nx,j,k)/alpha_c(nx,j,k), &
+                                                      q_state(eq_vx, nx, j, k))
             q_state(eq_vy, nx+g, j, k) = q_state(eq_vy, nx, j, k)
             q_state(eq_vz, nx+g, j, k) = q_state(eq_vz, nx, j, k)
           end do
@@ -846,15 +957,17 @@ contains
             q_state(:, 1-g, j, k) = q_state(:, 1, j, k) 
             q_state(eq_de, 1-g, j, k) = max(q_state(eq_de, 1, j, k), rho_floor)
             q_state(eq_pr, 1-g, j, k) = max(q_state(eq_pr, 1, j, k), p_floor)
-            ! CORRECCIÓN VITAL: El gas solo puede CAER hacia adentro (vx <= 0)
-            q_state(eq_vx, 1-g, j, k) = min(0.0d0, q_state(eq_vx, 1, j, k))
+            ! No entra fluido desde la excisión: alpha*v^r-beta^r <= 0.
+            q_state(eq_vx, 1-g, j, k) = min(beta_c(1,1,j,k)/alpha_c(1,j,k), &
+                                                     q_state(eq_vx, 1, j, k))
 
             ! --- FRONTERA EXTERNA ---
             q_state(:, nx+g, j, k) = q_state(:, nx, j, k)
             q_state(eq_de, nx+g, j, k) = max(q_state(eq_de, nx, j, k), rho_floor)
             q_state(eq_pr, nx+g, j, k) = max(q_state(eq_pr, nx, j, k), p_floor)
-            ! El gas solo puede SALIR del dominio (vx >= 0)
-            q_state(eq_vx, nx+g, j, k) = max(0.0d0, q_state(eq_vx, nx, j, k)) 
+            ! No entra fluido desde el exterior: alpha*v^r-beta^r >= 0.
+            q_state(eq_vx, nx+g, j, k) = max(beta_c(1,nx,j,k)/alpha_c(nx,j,k), &
+                                                      q_state(eq_vx, nx, j, k))
           end do
         end do
       end do
@@ -899,12 +1012,15 @@ contains
             q_state(:, 1-g, j, k) = q_state(:, 1, j, k) 
             q_state(eq_de, 1-g, j, k) = max(q_state(eq_de, 1, j, k), rho_floor)
             q_state(eq_pr, 1-g, j, k) = max(q_state(eq_pr, 1, j, k), p_floor)
+            q_state(eq_vx, 1-g, j, k) = min(beta_c(1,1,j,k)/alpha_c(1,j,k), &
+                                                     q_state(eq_vx, 1, j, k))
             
             ! Externa (Outflow)
             q_state(:, nx+g, j, k) = q_state(:, nx, j, k)
             q_state(eq_de, nx+g, j, k) = max(q_state(eq_de, nx, j, k), rho_floor)
             q_state(eq_pr, nx+g, j, k) = max(q_state(eq_pr, nx, j, k), p_floor)
-            q_state(eq_vx, nx+g, j, k) = max(0.0d0, q_state(eq_vx, nx, j, k)) 
+            q_state(eq_vx, nx+g, j, k) = max(beta_c(1,nx,j,k)/alpha_c(nx,j,k), &
+                                                      q_state(eq_vx, nx, j, k))
           end do
         end do
       end do
@@ -941,6 +1057,10 @@ contains
         q_state(:, :, :, 1-g) = q_state(:, :, :, nz + 1 - g)
         q_state(:, :, :, nz+g)  = q_state(:, :, :, g)
       end do
+
+    case default
+      write(*,*) 'CRITICAL ERROR: case_name no valido en set_boundary_conditions.'
+      error stop 1
 
     end select
   end subroutine set_boundary_conditions
