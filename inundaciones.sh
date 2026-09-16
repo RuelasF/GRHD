@@ -13,10 +13,9 @@ set -Eeuo pipefail
 umask 027
 
 readonly SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly SCRIPT_PARENT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"
 CAMPAIGN_ROOT="${CAMPAIGN_ROOT:-$SCRIPT_PARENT/inundaciones_ppi_800_t5000}"
-REPO_URL="${REPO_URL:-git@github.com:RuelasF/GRHD.git}"
-REPO_BRANCH="${REPO_BRANCH:-main}"
 CONCURRENT_CASES="${CONCURRENT_CASES:-6}"
 BUILD_JOBS="${BUILD_JOBS:-12}"
 PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
@@ -40,8 +39,8 @@ $CAMPAIGN_LABEL: malla 800x1x400, t=5000 M, perturbación en t=1000 M.
   sbatch $LAUNCHER_NAME         Envía a Slurm con nombre inundaciones.
   qsub $LAUNCHER_NAME           Envía a PBS con nombre inundaciones.
 
-Variables opcionales: CAMPAIGN_ROOT, REPO_URL, REPO_BRANCH, BUILD_JOBS.
-PREFLIGHT_ONLY=1 hace clonación, compilación, pruebas y validación sin correr.
+Variables opcionales: CAMPAIGN_ROOT y BUILD_JOBS.
+PREFLIGHT_ONLY=1 hace compilación, pruebas y validación sin correr.
 Al reejecutar sobre la misma CAMPAIGN_ROOT se conserva el commit inicial,
 se omiten casos terminados y los incompletos continúan desde su checkpoint.
 EOF
@@ -68,7 +67,7 @@ case "${1:-}" in
     ;;
 esac
 
-readonly SOURCE_ROOT="$CAMPAIGN_ROOT/source"
+readonly SOURCE_ROOT="$SCRIPT_DIR"
 readonly PARAMETER_ROOT="$CAMPAIGN_ROOT/parameters"
 readonly RESULT_ROOT="$CAMPAIGN_ROOT/results"
 readonly LOG_ROOT="$CAMPAIGN_ROOT/logs"
@@ -112,27 +111,31 @@ for command_name in git make gfortran awk sort find sha256sum nproc; do
 done
 
 prepare_source() {
-  local pinned_commit current_commit
+  local pinned_commit current_commit origin_main shallow_repository
 
-  if [[ ! -d "$SOURCE_ROOT/.git" ]]; then
-    if [[ -e "$SOURCE_ROOT" && -n "$(find "$SOURCE_ROOT" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-      die "$SOURCE_ROOT existe y no es un clon Git vacío"
-    fi
-    printf '[%s] Clonando %s, rama %s...\n' "$(timestamp)" "$REPO_URL" "$REPO_BRANCH"
-    git clone --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$SOURCE_ROOT"
-    current_commit="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+  [[ -d "$SOURCE_ROOT/.git" ]] || \
+    die "ejecute este lanzador dentro de un clon Git completo de RuelasF/GRHD"
+  shallow_repository="$(git -C "$SOURCE_ROOT" rev-parse --is-shallow-repository)"
+  [[ "$shallow_repository" == false ]] || \
+    die 'el repositorio es superficial; use git fetch --unshallow antes de iniciar'
+  if [[ -n "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no)" ]]; then
+    die "el clon tiene cambios rastreados; no se compilará una fuente sin identificar"
+  fi
+
+  current_commit="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+  if origin_main="$(git -C "$SOURCE_ROOT" rev-parse refs/remotes/origin/main 2>/dev/null)"; then
+    [[ "$current_commit" == "$origin_main" ]] || \
+      die "HEAD no coincide con origin/main; ejecute git pull --ff-only antes de iniciar"
+  fi
+
+  if [[ ! -s "$PIN_FILE" ]]; then
     printf '%s\n' "$current_commit" >"$PIN_FILE"
   else
-    [[ -s "$PIN_FILE" ]] || die "falta $PIN_FILE para el clon existente"
     pinned_commit="$(<"$PIN_FILE")"
-    current_commit="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
     [[ "$current_commit" == "$pinned_commit" ]] || \
       die "el clon cambió de commit ($current_commit != $pinned_commit)"
-    if [[ -n "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no)" ]]; then
-      die "el clon de campaña tiene cambios rastreados; no se modificará"
-    fi
-    printf '[%s] Reanudación fijada al commit %s.\n' "$(timestamp)" "$current_commit"
   fi
+  printf '[%s] Fuente fijada al commit %s.\n' "$(timestamp)" "$current_commit"
 }
 
 build_and_test() {
