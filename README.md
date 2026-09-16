@@ -335,13 +335,15 @@ Con `ny=1`, las masas y amplitudes integradas heredan una cuadratura polar de un
 
 `inundaciones.sh` automatiza la campaña ecuatorial destinada al congreso: EF con `a=0` y KS con `a=0,0.2,0.4,0.6,0.9`, cada fondo con MP5--HLLE y WENO5--HLLE. Todos los casos usan `800x1x400`, `t_final=5000 M`, ruido de presión de `1%` con semilla 3435 en `t=1000 M`, salidas VTK cada `50 M` y checkpoints cada `250 M`. El sensor de choques se desactiva para comparar los reconstructores sin degradación adaptativa.
 
-El controlador debe ejecutarse dentro de un clon completo de la rama `main` de GitHub. Fija el commit para toda la campaña, compila, ejecuta `make test`, valida los doce `.par` con `--check` y sólo entonces inicia las simulaciones. Ejecuta seis casos simultáneos con un presupuesto total de 72 hilos; si la asignación o la prueba OpenMP de 72 falla, usa 60. El binario y el trabajo aparecen como `inundaciones` en las herramientas del sistema. Para descargar el código completo y lanzar una ejecución que sobreviva al cierre de la terminal:
+El controlador está diseñado para recibir el ejecutable `grhd2` ya compilado junto con el script; no requiere Git, Make ni un compilador en el servidor. Copia el binario como `inundaciones`, registra su SHA-256, genera y valida los doce `.par` con `--check` y sólo entonces inicia las simulaciones. Ejecuta seis casos simultáneos con un presupuesto total de 72 hilos; si el sistema expone menos de 72 pero al menos 60, usa 60. Para transferir los archivos y lanzar una ejecución que sobreviva al cierre de la terminal:
 
 ```bash
-git clone git@github.com:RuelasF/GRHD.git
-cd GRHD
+scp grhd2 inundaciones.sh usuario@servidor:/ruta/campana/
+# Ya en /ruta/campana del servidor:
 bash inundaciones.sh --detach
 ```
+
+Si el binario tiene otro nombre o ubicación puede indicarse con `GRHD_EXECUTABLE=/ruta/al/binario`. Al reanudar, el script exige el mismo SHA-256 para impedir que una campaña mezcle ejecutables distintos.
 
 También puede enviarse con `sbatch inundaciones.sh` o `qsub inundaciones.sh` si el clúster usa uno de esos planificadores. El estado general se consulta con:
 
@@ -353,11 +355,11 @@ Una segunda ejecución con la misma `CAMPAIGN_ROOT` omite casos completos y crea
 
 Este barrido conserva `r_in`, `r_pmax` y `K`, no la masa o la densidad máxima inicial del toro. Por ello sirve para comparar las familias configuradas y estudiar señales PPI, pero las diferencias entre espines no deben presentarse como efecto causal aislado de `a` sin una campaña adicional que empareje propiedades físicas del disco. `GW_signal.dat` sigue siendo un proxy Finn--Evans con una sola celda polar, no una amplitud tridimensional observable.
 
-El lanzador `inundaciones_weno3.sh` reproduce los mismos seis fondos exclusivamente con WENO3--HLLE en otro directorio, `inundaciones_ppi_weno3_800_t5000`. Está configurado para usar exactamente 27 hilos: ejecuta tres casos simultáneos con 9 hilos cada uno y completa la matriz en dos tandas. Conserva la misma malla, perturbación, tiempos, salidas y reglas de reanudación. En el segundo servidor se descarga y ejecuta con:
+El lanzador `inundaciones_weno3.sh` reproduce los mismos seis fondos exclusivamente con WENO3--HLLE en otro directorio, `inundaciones_ppi_weno3_800_t5000`. Está configurado para usar exactamente 27 hilos: ejecuta tres casos simultáneos con 9 hilos cada uno y completa la matriz en dos tandas. Conserva la misma malla, perturbación, tiempos, salidas y reglas de reanudación. Como este lanzador reutiliza el controlador general, al segundo servidor se transfieren el ejecutable y ambos scripts:
 
 ```bash
-git clone git@github.com:RuelasF/GRHD.git
-cd GRHD
+scp grhd2 inundaciones.sh inundaciones_weno3.sh usuario@servidor:/ruta/campana/
+# Ya en /ruta/campana del servidor:
 bash inundaciones_weno3.sh --detach
 ```
 

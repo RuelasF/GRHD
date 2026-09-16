@@ -17,7 +17,6 @@ readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly SCRIPT_PARENT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"
 CAMPAIGN_ROOT="${CAMPAIGN_ROOT:-$SCRIPT_PARENT/inundaciones_ppi_800_t5000}"
 CONCURRENT_CASES="${CONCURRENT_CASES:-6}"
-BUILD_JOBS="${BUILD_JOBS:-12}"
 PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
 PRIMARY_THREADS="${PRIMARY_THREADS:-72}"
 FALLBACK_THREADS="${FALLBACK_THREADS:-60}"
@@ -39,9 +38,9 @@ $CAMPAIGN_LABEL: malla 800x1x400, t=5000 M, perturbación en t=1000 M.
   sbatch $LAUNCHER_NAME         Envía a Slurm con nombre inundaciones.
   qsub $LAUNCHER_NAME           Envía a PBS con nombre inundaciones.
 
-Variables opcionales: CAMPAIGN_ROOT y BUILD_JOBS.
-PREFLIGHT_ONLY=1 hace compilación, pruebas y validación sin correr.
-Al reejecutar sobre la misma CAMPAIGN_ROOT se conserva el commit inicial,
+Variables opcionales: CAMPAIGN_ROOT y GRHD_EXECUTABLE.
+PREFLIGHT_ONLY=1 valida el ejecutable, los hilos y los .par sin correr.
+Al reejecutar sobre la misma CAMPAIGN_ROOT se conserva el binario inicial,
 se omiten casos terminados y los incompletos continúan desde su checkpoint.
 EOF
 }
@@ -67,7 +66,7 @@ case "${1:-}" in
     ;;
 esac
 
-readonly SOURCE_ROOT="$SCRIPT_DIR"
+SOURCE_EXECUTABLE="${GRHD_EXECUTABLE:-$SCRIPT_DIR/grhd2}"
 readonly PARAMETER_ROOT="$CAMPAIGN_ROOT/parameters"
 readonly RESULT_ROOT="$CAMPAIGN_ROOT/results"
 readonly LOG_ROOT="$CAMPAIGN_ROOT/logs"
@@ -75,8 +74,7 @@ readonly STATE_ROOT="$CAMPAIGN_ROOT/state"
 readonly BIN_ROOT="$CAMPAIGN_ROOT/bin"
 readonly DRIVER_LOG="$LOG_ROOT/inundaciones.driver.log"
 readonly SUMMARY="$RESULT_ROOT/summary.tsv"
-readonly PIN_FILE="$STATE_ROOT/source_commit.txt"
-readonly BUILD_STAMP="$STATE_ROOT/build_commit.txt"
+readonly EXECUTABLE_HASH_FILE="$STATE_ROOT/inundaciones.sha256"
 readonly CAMPAIGN_EXECUTABLE="$BIN_ROOT/inundaciones"
 
 mkdir -p "$PARAMETER_ROOT" "$RESULT_ROOT" "$LOG_ROOT" "$STATE_ROOT" "$BIN_ROOT"
@@ -106,93 +104,34 @@ trap 'terminate_children HUP' HUP
 trap 'terminate_children INT' INT
 trap 'terminate_children TERM' TERM
 
-for command_name in git make gfortran awk sort find sha256sum nproc; do
+for command_name in awk sort find sha256sum nproc; do
   command -v "$command_name" >/dev/null 2>&1 || die "falta el comando requerido: $command_name"
 done
 
-prepare_source() {
-  local pinned_commit current_commit origin_main shallow_repository
+prepare_executable() {
+  local source_hash campaign_hash pinned_hash
 
-  [[ -d "$SOURCE_ROOT/.git" ]] || \
-    die "ejecute este lanzador dentro de un clon Git completo de RuelasF/GRHD"
-  shallow_repository="$(git -C "$SOURCE_ROOT" rev-parse --is-shallow-repository)"
-  [[ "$shallow_repository" == false ]] || \
-    die 'el repositorio es superficial; use git fetch --unshallow antes de iniciar'
-  if [[ -n "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no)" ]]; then
-    die "el clon tiene cambios rastreados; no se compilará una fuente sin identificar"
+  [[ -f "$SOURCE_EXECUTABLE" ]] || die "no se encontró el ejecutable: $SOURCE_EXECUTABLE"
+  [[ -x "$SOURCE_EXECUTABLE" ]] || chmod u+x "$SOURCE_EXECUTABLE" || \
+    die "no se pudo marcar como ejecutable: $SOURCE_EXECUTABLE"
+  source_hash="$(sha256sum "$SOURCE_EXECUTABLE" | awk '{print $1}')"
+
+  if [[ ! -x "$CAMPAIGN_EXECUTABLE" ]]; then
+    cp -p "$SOURCE_EXECUTABLE" "$CAMPAIGN_EXECUTABLE"
+    chmod 750 "$CAMPAIGN_EXECUTABLE"
   fi
+  campaign_hash="$(sha256sum "$CAMPAIGN_EXECUTABLE" | awk '{print $1}')"
+  [[ "$campaign_hash" == "$source_hash" ]] || \
+    die 'el ejecutable recibido no coincide con el binario fijado para esta campaña'
 
-  current_commit="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
-  if origin_main="$(git -C "$SOURCE_ROOT" rev-parse refs/remotes/origin/main 2>/dev/null)"; then
-    [[ "$current_commit" == "$origin_main" ]] || \
-      die "HEAD no coincide con origin/main; ejecute git pull --ff-only antes de iniciar"
-  fi
-
-  if [[ ! -s "$PIN_FILE" ]]; then
-    printf '%s\n' "$current_commit" >"$PIN_FILE"
+  if [[ -s "$EXECUTABLE_HASH_FILE" ]]; then
+    pinned_hash="$(awk '{print $1}' "$EXECUTABLE_HASH_FILE")"
+    [[ "$campaign_hash" == "$pinned_hash" ]] || \
+      die 'cambió el hash del ejecutable; use otra CAMPAIGN_ROOT para una campaña nueva'
   else
-    pinned_commit="$(<"$PIN_FILE")"
-    [[ "$current_commit" == "$pinned_commit" ]] || \
-      die "el clon cambió de commit ($current_commit != $pinned_commit)"
+    printf '%s  inundaciones\n' "$campaign_hash" >"$EXECUTABLE_HASH_FILE"
   fi
-  printf '[%s] Fuente fijada al commit %s.\n' "$(timestamp)" "$current_commit"
-}
-
-build_and_test() {
-  local current_commit built_commit=''
-  current_commit="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
-  [[ -s "$BUILD_STAMP" ]] && built_commit="$(<"$BUILD_STAMP")"
-
-  if [[ "$built_commit" == "$current_commit" && -x "$CAMPAIGN_EXECUTABLE" ]]; then
-    printf '[%s] Compilación y pruebas ya aprobadas para %s.\n' "$(timestamp)" "$current_commit"
-    return
-  fi
-
-  printf '[%s] Compilando el commit %s...\n' "$(timestamp)" "$current_commit"
-  make -C "$SOURCE_ROOT" clean >"$LOG_ROOT/build.log" 2>&1
-  make -C "$SOURCE_ROOT" -j"$BUILD_JOBS" >>"$LOG_ROOT/build.log" 2>&1 || {
-    tail -n 80 "$LOG_ROOT/build.log" >&2
-    die 'falló la compilación'
-  }
-  make -C "$SOURCE_ROOT" test >"$LOG_ROOT/tests.log" 2>&1 || {
-    tail -n 120 "$LOG_ROOT/tests.log" >&2
-    die 'falló make test'
-  }
-
-  cp -p "$SOURCE_ROOT/grhd2" "$CAMPAIGN_EXECUTABLE"
-  chmod 750 "$CAMPAIGN_EXECUTABLE"
-  sha256sum "$CAMPAIGN_EXECUTABLE" >"$STATE_ROOT/inundaciones.sha256"
-  gfortran --version | head -n 1 >"$STATE_ROOT/compiler.txt"
-  printf '%s\n' "$current_commit" >"$BUILD_STAMP"
-  printf '[%s] Compilación y suite completa: PASS.\n' "$(timestamp)"
-}
-
-probe_threads() {
-  local requested="$1" observed
-  cat >"$STATE_ROOT/thread_probe.f90" <<'EOF'
-program thread_probe
-  use omp_lib
-  implicit none
-  integer :: expected, observed, io_status
-  character(len=32) :: argument
-  call get_command_argument(1, argument)
-  read(argument, *, iostat=io_status) expected
-  if (io_status /= 0) error stop 2
-  observed = 0
-  !$omp parallel
-  !$omp single
-  observed = omp_get_num_threads()
-  !$omp end single
-  !$omp end parallel
-  write(*,'(I0)') observed
-  if (observed /= expected) error stop 3
-end program thread_probe
-EOF
-  gfortran -O2 -fopenmp -o "$STATE_ROOT/thread_probe" "$STATE_ROOT/thread_probe.f90" \
-    >"$LOG_ROOT/thread_probe.build.log" 2>&1 || return 1
-  observed="$(OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$requested" \
-    "$STATE_ROOT/thread_probe" "$requested" 2>"$LOG_ROOT/thread_probe_${requested}.log")" || return 1
-  [[ "$observed" == "$requested" ]]
+  printf '[%s] Ejecutable fijado: SHA-256 %s.\n' "$(timestamp)" "$campaign_hash"
 }
 
 select_thread_budget() {
@@ -209,10 +148,9 @@ select_thread_budget() {
   [[ "$PRIMARY_THREADS" =~ ^[1-9][0-9]*$ ]] || die 'PRIMARY_THREADS debe ser entero positivo'
   [[ "$FALLBACK_THREADS" =~ ^[0-9]+$ ]] || die 'FALLBACK_THREADS debe ser entero no negativo'
 
-  if (( available >= PRIMARY_THREADS )) && probe_threads "$PRIMARY_THREADS"; then
+  if (( available >= PRIMARY_THREADS )); then
     TOTAL_THREADS="$PRIMARY_THREADS"
-  elif (( FALLBACK_THREADS > 0 && available >= FALLBACK_THREADS )) && \
-       probe_threads "$FALLBACK_THREADS"; then
+  elif (( FALLBACK_THREADS > 0 && available >= FALLBACK_THREADS )); then
     TOTAL_THREADS="$FALLBACK_THREADS"
   else
     if (( FALLBACK_THREADS > 0 )); then
@@ -513,7 +451,7 @@ run_case() {
 
   {
     printf 'case=%s\n' "$label"
-    printf 'source_commit=%s\n' "$(<"$PIN_FILE")"
+    printf 'executable_sha256=%s\n' "$(awk '{print $1}' "$EXECUTABLE_HASH_FILE")"
     printf 'threads=%s\n' "$THREADS_PER_CASE"
     printf 'completed=%s\n' "$(timestamp)"
   } >"$case_root/.complete"
@@ -563,13 +501,12 @@ write_summary() {
 }
 
 printf '[%s] Inicio del controlador inundaciones.\n' "$(timestamp)"
-prepare_source
-build_and_test
+prepare_executable
 validate_parameter_files
 select_thread_budget
 
 if [[ "$PREFLIGHT_ONLY" == 1 ]]; then
-  printf '[%s] PREFLIGHT PASS: fuente, compilación, pruebas, hilos y %d archivos .par.\n' \
+  printf '[%s] PREFLIGHT PASS: ejecutable, hilos y %d archivos .par.\n' \
     "$(timestamp)" "${#CASES[@]}"
   exit 0
 fi
