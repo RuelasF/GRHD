@@ -64,6 +64,20 @@ watch -n 1 nvidia-smi
 
 `OMP_NUM_THREADS` no controla esta ruta. Las transferencias dispositivo--host se reservan para VTK, checkpoints, diagnósticos y la perturbación diferida; reducir su frecuencia disminuye el tráfico PCIe.
 
+#### Comparación reproducible CPU--P100 con el jet
+
+La rama incluye un benchmark del jet axisimétrico con la malla nominal `320 x 1 x 800`, WENO5--HLLE, FP64 y `shock_sensor = true`. Ambos ejecutables reciben el mismo archivo de parámetros y evolucionan hasta `t=2`; la prueba mide el tiempo de pared y compara todos los campos del VTK final mediante normas L1, L2, Linf y L2 relativa.
+
+En una máquina con `gfortran`, NVIDIA HPC SDK, controlador NVIDIA y una P100 visible, basta ejecutar:
+
+```bash
+git clone --branch openacc-p100-soa --single-branch git@github.com:RuelasF/GRHD.git
+cd GRHD
+CPU_THREADS=20 GPU_ID=0 make benchmark-jet-p100
+```
+
+Los resultados quedan en `.benchmark/jet_cpu_p100_FECHA/`: `system.txt` registra hardware, compiladores y commit; `cpu/` y `gpu/` contienen logs, tiempos y VTK; `comparison.txt` contiene las diferencias numéricas y `timing_summary.txt` la aceleración CPU/GPU. `CPU_THREADS` debe representar la referencia que se desea comparar y no controla el cálculo OpenACC. Para verificar sólo la ruta CPU puede ejecutarse `bash benchmarks/jet/run_cpu_p100.sh --cpu-only`.
+
 Para eliminar objetos, módulos, ejecutable y binarios de prueba:
 
 ```bash

@@ -1,0 +1,47 @@
+# Comparacion reproducible OpenMP CPU vs OpenACC P100.
+problem = axisymmetric_jet
+metric = minkowski
+geometry = cylindrical
+bh_mass = 0.0
+spin = 0.0
+adiabatic_index = 1.6666666666666667
+
+# Malla nominal del jet; phi es la direccion degenerada.
+nx = 320
+ny = 1
+nz = 800
+r_min = 0.0
+r_max = 16.0
+y_min = 0.0
+y_max = 3.14159265358979323846
+z_min = 0.0
+z_max = 40.0
+logarithmic_r = false
+
+reconstruction = weno5
+riemann_solver = hlle
+shock_sensor = true
+
+final_time = 2.0
+cfl = 0.25
+save_interval = 2.0
+checkpoint_interval = 1000.0
+mass_monitor_stride = 0
+
+extract_gw = false
+extract_mdot = false
+ppi_diagnostics = false
+perturbation = none
+
+jet_ambient_density = 10.0
+jet_ambient_pressure = 0.01
+jet_ambient_velocity = 0.0
+jet_nozzle_radius = 1.0
+jet_nozzle_length = 1.0
+jet_density = 0.1
+jet_pressure = 0.01
+jet_velocity = 0.99
+
+output_prefix = JET_BENCH
+output_folder = jet_output
+vtk_mapping = physical

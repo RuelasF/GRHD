@@ -24,7 +24,7 @@ TEST_OUTPUT_TARGET = tests/test_output_paths
 TEST_ACC_RECON_TARGET = tests/test_accelerator_reconstruction
 TEST_ACC_RHS_TARGET = tests/test_accelerator_rhs
 
-.PHONY: server-broadwell openacc-p100 openacc-rtx4070 test test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output test-acc-reconstruction test-acc-rhs clean
+.PHONY: server-broadwell openacc-p100 openacc-rtx4070 benchmark-jet-p100 test test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output test-acc-reconstruction test-acc-rhs clean
 
 # Ejecutable transferible para Intel Xeon E5 v4 (Broadwell-EP).
 server-broadwell:
@@ -42,6 +42,10 @@ openacc-p100:
 openacc-rtx4070:
 	$(MAKE) clean
 	$(MAKE) FC=nvfortran FFLAGS='-O3 -acc=gpu -gpu=cc89,lineinfo -Minfo=accel -Mfree -Mextend -cpp -DUSE_OPENACC' $(TARGET)
+
+# Compila CPU y P100, ejecuta el mismo jet y compara tiempos y campos finales.
+benchmark-jet-p100:
+	bash benchmarks/jet/run_cpu_p100.sh
 
 # Lista de archivos objeto en el orden estricto de dependencias
 OBJS = variables.o \

@@ -26,6 +26,11 @@ tests/test_output_paths
 *.py
 *.md
 !README.md
+!benchmarks/
+!benchmarks/jet/
+!benchmarks/jet/*.sh
+!benchmarks/jet/*.py
+!benchmarks/jet/*.par
 
 # --- Documentación local no publicada ---
 docs/*
@@ -49,6 +54,7 @@ FM_*/
 AdvectedWave_*/
 EFKS_comparison_logs_and_figures/
 .validation/
+.benchmark/
 
 # --- Scripts auxiliares y Otros ---
 *.sample
