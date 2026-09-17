@@ -171,23 +171,27 @@ select_thread_budget() {
 }
 
 declare -a CPU_SETS=()
+OMP_PLACES_VALUE=cores
+AFFINITY_UNIT='núcleos físicos'
 
 configure_cpu_affinity() {
-  local cpu core socket online key cpu_set slot index allowed_list
-  local -a physical_cpus=() sockets=() sorted_sockets=() set_cpus=()
-  local -A topology_cores=() seen_cores=() socket_sets=()
+  local cpu core socket online key cpu_set slot index allowed_list available_count
+  local -a physical_cpus=() logical_cpus=() selected_cpus=()
+  local -a sockets=() sorted_sockets=() set_cpus=()
+  local -A topology_cores=() seen_cores=() seen_sockets=()
+  local -A physical_socket_sets=() logical_socket_sets=()
 
   case "$CPU_BINDING" in
     none)
       printf '[%s] Afinidad explícita desactivada.\n' "$(timestamp)"
       return 0
       ;;
-    physical) ;;
-    *) die "CPU_BINDING debe ser none o physical; recibido: $CPU_BINDING" ;;
+    physical|smt) ;;
+    *) die "CPU_BINDING debe ser none, physical o smt; recibido: $CPU_BINDING" ;;
   esac
 
-  command -v lscpu >/dev/null 2>&1 || die 'CPU_BINDING=physical requiere lscpu'
-  command -v taskset >/dev/null 2>&1 || die 'CPU_BINDING=physical requiere taskset'
+  command -v lscpu >/dev/null 2>&1 || die 'la afinidad de CPU requiere lscpu'
+  command -v taskset >/dev/null 2>&1 || die 'la afinidad de CPU requiere taskset'
 
   while IFS=, read -r cpu core socket online; do
     [[ "$cpu" =~ ^[0-9]+$ && "$core" =~ ^[0-9]+$ && "$socket" =~ ^[0-9]+$ ]] || continue
@@ -196,40 +200,65 @@ configure_cpu_affinity() {
     # taskset descarta tanto CPU fuera del cpuset actual como CPU fuera de línea;
     # no dependemos del texto localizado de la columna Online de lscpu.
     taskset -c "$cpu" true >/dev/null 2>&1 || continue
-    [[ -z "${seen_cores[$key]+x}" ]] || continue
-    seen_cores[$key]=1
-    physical_cpus+=("$cpu")
-    if [[ -z "${socket_sets[$socket]+x}" ]]; then
+
+    logical_cpus+=("$cpu")
+    if [[ -z "${seen_sockets[$socket]+x}" ]]; then
+      seen_sockets[$socket]=1
       sockets+=("$socket")
-      socket_sets[$socket]="$cpu"
+      logical_socket_sets[$socket]="$cpu"
     else
-      socket_sets[$socket]+=",$cpu"
+      logical_socket_sets[$socket]+=",$cpu"
+    fi
+
+    if [[ -z "${seen_cores[$key]+x}" ]]; then
+      seen_cores[$key]=1
+      physical_cpus+=("$cpu")
+      if [[ -z "${physical_socket_sets[$socket]+x}" ]]; then
+        physical_socket_sets[$socket]="$cpu"
+      else
+        physical_socket_sets[$socket]+=",$cpu"
+      fi
     fi
   done < <(LC_ALL=C lscpu -p=CPU,CORE,SOCKET,ONLINE)
 
-  if (( ${#physical_cpus[@]} < TOTAL_THREADS )); then
+  if [[ "$CPU_BINDING" == physical ]]; then
+    selected_cpus=("${physical_cpus[@]}")
+    OMP_PLACES_VALUE=cores
+    AFFINITY_UNIT='núcleos físicos'
+  else
+    selected_cpus=("${logical_cpus[@]}")
+    OMP_PLACES_VALUE=threads
+    AFFINITY_UNIT='hilos lógicos SMT'
+  fi
+  available_count=${#selected_cpus[@]}
+
+  if (( available_count < TOTAL_THREADS )); then
     allowed_list="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status 2>/dev/null || true)"
-    die "se solicitaron $TOTAL_THREADS núcleos físicos; lscpu detectó ${#topology_cores[@]}, pero taskset permite ${#physical_cpus[@]} dentro de Cpus_allowed_list=${allowed_list:-desconocida}"
+    die "se solicitaron $TOTAL_THREADS $AFFINITY_UNIT; lscpu detectó ${#topology_cores[@]} núcleos físicos y taskset permite $available_count unidades dentro de Cpus_allowed_list=${allowed_list:-desconocida}"
   fi
 
   # Cuando coincide un proceso por socket, cada caso conserva su caché L3 local.
   if (( ${#sockets[@]} == CONCURRENT_CASES )); then
     mapfile -t sorted_sockets < <(printf '%s\n' "${sockets[@]}" | sort -n)
     for socket in "${sorted_sockets[@]}"; do
-      cpu_set="${socket_sets[$socket]}"
+      if [[ "$CPU_BINDING" == physical ]]; then
+        cpu_set="${physical_socket_sets[$socket]}"
+      else
+        cpu_set="${logical_socket_sets[$socket]}"
+      fi
       IFS=, read -r -a set_cpus <<<"$cpu_set"
       (( ${#set_cpus[@]} == THREADS_PER_CASE )) || \
-        die "el socket $socket ofrece ${#set_cpus[@]} núcleos físicos; se requieren $THREADS_PER_CASE"
+        die "el socket $socket ofrece ${#set_cpus[@]} $AFFINITY_UNIT; se requieren $THREADS_PER_CASE"
       CPU_SETS+=("$cpu_set")
     done
   else
-    # Respaldo genérico: conjuntos disjuntos de un hilo lógico por núcleo físico.
+    # Respaldo genérico: conjuntos disjuntos de las unidades seleccionadas.
     index=0
     for ((slot=0; slot<CONCURRENT_CASES; slot++)); do
       cpu_set=""
       for ((core=0; core<THREADS_PER_CASE; core++)); do
         [[ -z "$cpu_set" ]] || cpu_set+=,
-        cpu_set+="${physical_cpus[$index]}"
+        cpu_set+="${selected_cpus[$index]}"
         index=$((index + 1))
       done
       CPU_SETS+=("$cpu_set")
@@ -237,8 +266,8 @@ configure_cpu_affinity() {
   fi
 
   for ((slot=0; slot<CONCURRENT_CASES; slot++)); do
-    printf '[%s] Afinidad slot %d: CPU %s (%d núcleos físicos).\n' \
-      "$(timestamp)" "$slot" "${CPU_SETS[$slot]}" "$THREADS_PER_CASE"
+    printf '[%s] Afinidad slot %d: CPU %s (%d %s).\n' \
+      "$(timestamp)" "$slot" "${CPU_SETS[$slot]}" "$THREADS_PER_CASE" "$AFFINITY_UNIT"
   done
 }
 
@@ -498,20 +527,20 @@ run_case() {
     return 1
   fi
 
-  if [[ "$CPU_BINDING" == physical ]]; then
+  if [[ "$CPU_BINDING" != none ]]; then
     cpu_set="${CPU_SETS[$slot]}"
-    printf '[%s] START %s, %s, %d núcleos, CPU %s, proceso inundaciones.\n' \
-      "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE" "$cpu_set"
+    printf '[%s] START %s, %s, %d %s, CPU %s, proceso inundaciones.\n' \
+      "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE" "$AFFINITY_UNIT" "$cpu_set"
   else
     printf '[%s] START %s, %s, %d hilos, proceso inundaciones.\n' \
       "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE"
   fi
   printf '%s\n' "$(timestamp)" >"$LOG_ROOT/${label}_${session}.start"
   set +e
-  if [[ "$CPU_BINDING" == physical ]]; then
+  if [[ "$CPU_BINDING" != none ]]; then
     (cd "$CAMPAIGN_ROOT" && \
       OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$THREADS_PER_CASE" \
-      OMP_PLACES=cores OMP_PROC_BIND=CLOSE \
+      OMP_PLACES="$OMP_PLACES_VALUE" OMP_PROC_BIND=CLOSE \
       taskset -c "$cpu_set" "$CAMPAIGN_EXECUTABLE" "$relative_parameter") \
       >"$log_file" 2>&1
   else
