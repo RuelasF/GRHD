@@ -1,9 +1,9 @@
 ! =======================================================================================
 ! PROGRAMA PRINCIPAL: GRHD2 (General Relativistic Hydrodynamics 2D/3D)
 ! ---------------------------------------------------------------------------------------
-! Orquestador central de la simulación. Controla el bucle temporal principal, la 
-! integración espacial mediante el Método de Líneas (Method of Lines) delegada al 
-! módulo 'evolution', la actualización temporal usando Runge-Kutta SSP de 3er orden, 
+! Orquestador central de la simulación. Controla el bucle temporal principal, la
+! integración espacial mediante el Método de Líneas (Method of Lines) delegada al
+! módulo 'evolution', la actualización temporal usando Runge-Kutta SSP de 3er orden,
 ! y el paralelismo de memoria compartida masivo (OpenMP).
 ! =======================================================================================
 program grhd2
@@ -16,8 +16,8 @@ program grhd2
   use fluxes
   use reconstruction
   use evolution
+  use accelerator
   use output
-  use omp_lib
   implicit none
 
   real*8 :: start_time, end_time
@@ -29,8 +29,8 @@ program grhd2
   real*8 :: session_start_time, session_progress
   real*8 :: current_wtime, elapsed_time, eta
   integer :: current_percent, last_percent
-  integer :: eta_h, eta_m, eta_s  
-  integer :: elap_h, elap_m, elap_s  
+  integer :: eta_h, eta_m, eta_s
+  integer :: elap_h, elap_m, elap_s
 
   real*8 :: total_mass
 
@@ -55,7 +55,7 @@ program grhd2
   end if
 
   call read_parameter_header(trim(parameter_file))
-  start_time = omp_get_wtime()
+  start_time = wall_time_seconds()
 
   ! =========================================================================
   ! 1. ARRANQUE DEL SISTEMA (Cold Start vs Checkpoint Restart)
@@ -65,7 +65,7 @@ program grhd2
     print *, '>>> REANUDANDO SIMULACION DESDE BINARIO'
     print *, '>>> Archivo: ', trim(restart_file)
     print *, '=========================================='
-    
+
     open(20, file=trim(restart_file), status='old', form='unformatted', iostat=io_status)
     if (io_status /= 0) then
       write(*,*) 'ERROR: no se pudo abrir el checkpoint: ', trim(restart_file)
@@ -107,7 +107,7 @@ program grhd2
     do k = 1, nz
       do j = 1, ny
         do i = 1, nx
-          call cons_to_prim(u(:,i,j,k), p(:,i,j,k), i, j, k)
+          call cons_to_prim(u(i,j,k,:), p(i,j,k,:), i, j, k)
         end do
       end do
     end do
@@ -124,10 +124,10 @@ program grhd2
 
     ! Llenado inicial del vector de conservativas
     !$OMP PARALLEL DO PRIVATE(i, j, k)
-    do k = 1, nz 
+    do k = 1, nz
       do j = 1, ny
-        do i = 1, nx 
-          call prim_to_cons(p(:,i,j,k), up(:,i,j,k), i, j, k)
+        do i = 1, nx
+          call prim_to_cons(p(i,j,k,:), up(i,j,k,:), i, j, k)
         end do
       end do
     end do
@@ -135,6 +135,9 @@ program grhd2
 
     call save_vtk_at_time(integration_time)
   end if
+
+  call initialize_accelerator()
+  call initialize_rhs_accelerator()
 
   call initialize_auxiliary_output(.not. do_restart)
   if (do_gw_extraction) call calc_gw_strain(integration_time)
@@ -158,19 +161,21 @@ program grhd2
   end if
 
     total_mass = 0.0d0
-    
+
     ! Integral de volumen lógico 3D Coordenado
     ! (El Jacobiano dr/dx ya está matemáticamente embebido en el sqrt(gamma) dentro de u(eq_de))
     !$OMP PARALLEL DO REDUCTION(+:total_mass) PRIVATE(i, j, k)
+    !$ACC PARALLEL LOOP COLLAPSE(3) REDUCTION(+:total_mass) PRESENT(up)
     do k = 1, nz
       do j = 1, ny
         do i = 1, nx
-          total_mass = total_mass + up(eq_de, i, j, k) * dx * dy * dz
+          total_mass = total_mass + up(i,j,k,eq_de) * dx * dy * dz
         end do
       end do
     end do
+    !$ACC END PARALLEL LOOP
     !$OMP END PARALLEL DO
-    
+
     write(*,*) 'Initial Mass in domain: ', total_mass
 
   ! =========================================================================
@@ -186,6 +191,7 @@ program grhd2
     ! --- INYECCIÓN RETRASADA, CONFIGURABLE Y REPRODUCIBLE ---
     if (apply_perturbation .and. .not. perturbation_applied .and. &
         integration_time >= perturbation_time) then
+      call accelerator_update_host()
       print *, ""
       print *, "=========================================================="
       print *, ">>> TIEMPO DE PERTURBACION ALCANZADO: ", integration_time
@@ -209,13 +215,14 @@ program grhd2
         do k = 1, nz
           do j = 1, ny
             do i = 1, nx
-              call prim_to_cons(p(:,i,j,k), u(:,i,j,k), i, j, k)
-              up(:,i,j,k) = u(:,i,j,k)
+              call prim_to_cons(p(i,j,k,:), u(i,j,k,:), i, j, k)
+              up(i,j,k,:) = u(i,j,k,:)
             end do
           end do
         end do
         !$OMP END PARALLEL DO
         call set_boundary_conditions(p)
+        call accelerator_update_device()
 
         perturbation_applied = .true.
         call write_perturbation_event(integration_time)
@@ -229,38 +236,68 @@ program grhd2
     n_steps = n_steps + 1
     integration_time = integration_time + dt
 
-    u = up 
-    call set_boundary_conditions(p)
+    !$OMP PARALLEL DO PRIVATE(i,j,k)
+    !$ACC PARALLEL LOOP COLLAPSE(3) PRESENT(u,up)
+    do k=1,nz
+      do j=1,ny
+        do i=1,nx
+          u(i,j,k,:)=up(i,j,k,:)
+        end do
+      end do
+    end do
+    !$ACC END PARALLEL LOOP
+    !$OMP END PARALLEL DO
+    if (accelerator_enabled) then
+      call set_boundary_conditions_accelerator(p)
+    else
+      call set_boundary_conditions(p)
+    end if
 
     ! Integrador Runge-Kutta Fuerte de Preservación de Estabilidad (SSP)
     do rk = 1, 3
-    
+
       ! A. Integración Espacial: Reconstrucción, Flujos y Términos Fuente
       call calc_rhs(p, rhs)
 
       ! B. Avance Temporal Low-Storage
       ! (Las operaciones matriciales vectorizadas funcionan sin bucles for)
-      if (rk == 1) then
-        up = u + rhs * dt
-      else if (rk == 2) then
-        up = 0.75d0 * u + 0.25d0 * (up + rhs * dt)
-      else
-        up = (u + 2.0d0*(up + rhs * dt)) / 3.0d0
-      end if
-
-      ! C. Recuperación Termodinámica (Conservativas -> Primitivas)
-      !$OMP PARALLEL DO PRIVATE(i, j, k)
-      do k = 1, nz 
-        do j = 1, ny
-          do i = 1, nx
-            call cons_to_prim(up(:,i,j,k), p(:,i,j,k), i, j, k)
+      !$OMP PARALLEL DO PRIVATE(i,j,k)
+      !$ACC PARALLEL LOOP COLLAPSE(3) PRESENT(u,up,rhs)
+      do k=1,nz
+        do j=1,ny
+          do i=1,nx
+            if (rk == 1) then
+              up(i,j,k,:)=u(i,j,k,:)+rhs(i,j,k,:)*dt
+            else if (rk == 2) then
+              up(i,j,k,:)=0.75d0*u(i,j,k,:)+0.25d0*(up(i,j,k,:)+rhs(i,j,k,:)*dt)
+            else
+              up(i,j,k,:)=(u(i,j,k,:)+2.0d0*(up(i,j,k,:)+rhs(i,j,k,:)*dt))/3.0d0
+            end if
           end do
         end do
       end do
+      !$ACC END PARALLEL LOOP
+      !$OMP END PARALLEL DO
+
+      ! C. Recuperación Termodinámica (Conservativas -> Primitivas)
+      !$OMP PARALLEL DO PRIVATE(i, j, k)
+      !$ACC PARALLEL LOOP COLLAPSE(3) PRESENT(up,p,gamma_c,gamma_inv_c,sqrt_gamma_c)
+      do k = 1, nz
+        do j = 1, ny
+          do i = 1, nx
+            call cons_to_prim(up(i,j,k,:), p(i,j,k,:), i, j, k)
+          end do
+        end do
+      end do
+      !$ACC END PARALLEL LOOP
       !$OMP END PARALLEL DO
 
       ! D. Actualización de Topología de Red
-      call set_boundary_conditions(p)
+      if (accelerator_enabled) then
+        call set_boundary_conditions_accelerator(p)
+      else
+        call set_boundary_conditions(p)
+      end if
 
     end do
 
@@ -270,11 +307,13 @@ program grhd2
     ! Corrección: Sustitución de 'is_flat' por la validación arquitectónica global
     if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0) then
       if (mod(n_steps, extraction_stride) == 0) then
+        call accelerator_update_host()
         if (do_gw_extraction) call calc_gw_strain(integration_time)
         if (do_mdot_extraction) call calc_m_dot(integration_time)
       end if
     end if
     if (do_ppi_diagnostics .and. mod(n_steps, diagnostic_stride) == 0) then
+      call accelerator_update_host()
       call calc_ppi_modes(integration_time)
       call calc_global_diagnostics(integration_time)
     end if
@@ -283,17 +322,19 @@ program grhd2
     if (mass_monitor_stride > 0) then
       if (mod(n_steps, mass_monitor_stride) == 0) then
         total_mass = 0.0d0
-      
+
       ! Integral de volumen lógico 3D Coordenado
       ! (El Jacobiano dr/dx ya está matemáticamente embebido en el sqrt(gamma) dentro de u(eq_de))
         !$OMP PARALLEL DO REDUCTION(+:total_mass) PRIVATE(i, j, k)
+        !$ACC PARALLEL LOOP COLLAPSE(3) REDUCTION(+:total_mass) PRESENT(u)
         do k = 1, nz
           do j = 1, ny
             do i = 1, nx
-              total_mass = total_mass + u(eq_de, i, j,k) * dx * dy * dz
+              total_mass = total_mass + u(i,j,k,eq_de) * dx * dy * dz
             end do
           end do
         end do
+        !$ACC END PARALLEL LOOP
         !$OMP END PARALLEL DO
 
         write(*,*) 'Total Mass in domain: ', total_mass
@@ -303,66 +344,71 @@ program grhd2
     ! --- CRONÓMETRO INTELIGENTE (ETA) ---
     current_percent = int((integration_time / final_time) * 100.0d0)
     if (current_percent > last_percent) then
-      current_wtime = omp_get_wtime()
+      current_wtime = wall_time_seconds()
       elapsed_time = current_wtime - start_time
-      
+
       session_progress = (integration_time - session_start_time) / (final_time - session_start_time)
-      
+
       if (session_progress > 0.0d0) then
         eta = (elapsed_time / session_progress) - elapsed_time
-        
+
         eta_h = int(eta) / 3600
         eta_m = mod(int(eta), 3600) / 60
         eta_s = mod(int(eta), 60)
-        
+
         elap_h = int(elapsed_time) / 3600
         elap_m = mod(int(elapsed_time), 3600) / 60
         elap_s = mod(int(elapsed_time), 60)
-        
+
         write(*, '(A, I3, A, I3, A, I2.2, A, I2.2, A, I3, A, I2.2, A, I2.2, A, A, I8, A, F10.3)') &
           '>>> PROGRESO: ', current_percent, '% | Transcurrido: ', &
           elap_h, 'h ', elap_m, 'm ', elap_s, 's | Faltan aprox: ', &
           eta_h, 'h ', eta_m, 'm ', eta_s, 's  <<< | ', &
           'Paso ', n_steps, ' | Tiempo: ', integration_time
       end if
-      
+
       last_percent = current_percent
     end if
 
     ! --- EJECUCIÓN DEL GUARDADO A DISCO ---
     if (integration_time >= next_save_time) then
+      call accelerator_update_host()
       call save_vtk_at_time(next_save_time)
       next_save_time = next_save_time + save_interval
     end if
 
     if (integration_time >= next_checkpoint) then
+      call accelerator_update_host()
       call save_checkpoint(n_steps, integration_time)
       next_checkpoint = next_checkpoint + checkpoint_interval
     end if
-    
+
   end do
 
   ! Garantiza una muestra diagnóstica exactamente en el tiempo final aunque
   ! el último paso no coincida con el stride periódico.
   if (do_ppi_diagnostics .and. mod(n_steps, diagnostic_stride) /= 0) then
+    call accelerator_update_host()
     call calc_ppi_modes(integration_time)
     call calc_global_diagnostics(integration_time)
   end if
   if (trim(metric_type) /= 'Minkowski' .and. bh_mass > 0.0d0 .and. &
       mod(n_steps, extraction_stride) /= 0) then
+    call accelerator_update_host()
     if (do_gw_extraction) call calc_gw_strain(integration_time)
     if (do_mdot_extraction) call calc_m_dot(integration_time)
   end if
 
   ! Evaluación final de errores L1/L2 si corresponde al test
-  call calc_convergence_norms() 
+  call accelerator_update_host()
+  call calc_convergence_norms()
 
   ! =========================================================================
   ! 4. FINALIZACIÓN Y LIMPIEZA
   ! =========================================================================
-  end_time = omp_get_wtime()
+  end_time = wall_time_seconds()
   elapsed_time = end_time - start_time
-  
+
   elap_h = int(elapsed_time) / 3600
   elap_m = mod(int(elapsed_time), 3600) / 60
   elap_s = mod(int(elapsed_time), 60)
@@ -374,13 +420,14 @@ program grhd2
     ' TIEMPO TOTAL DE EJECUCIÓN: ', elap_h, 'h ', elap_m, 'm ', elap_s, 's'
   write(*, '(A, /)') '========================================================='
 
+  call finalize_rhs_accelerator()
+  call finalize_accelerator()
+
   deallocate(x,y,z,var_names)
   deallocate(u,up,s,rhs,p)
   deallocate(alpha_c,beta_c,gamma_c,gamma_inv_c,gmunu_c,sqrt_gamma_c,chris_c,dg_c,dlna_c)
 
-  if (nx > 1) then
-    deallocate(alpha_f_x,beta_f_x,gamma_f_x,sqrt_gamma_f_x)
-  end if
+  deallocate(alpha_f_x,beta_f_x,gamma_f_x,sqrt_gamma_f_x)
 
   if (ny > 1) then
     deallocate(alpha_f_y,beta_f_y,gamma_f_y,sqrt_gamma_f_y)

@@ -1,11 +1,11 @@
 ! =================================================================================
 ! Módulo: variables
-! Descripción: Contenedor global de las variables de estado, parámetros físicos, 
-! arreglos geométricos y banderas de control del simulador. 
+! Descripción: Contenedor global de las variables de estado, parámetros físicos,
+! arreglos geométricos y banderas de control del simulador.
 !
 ! Soporte Multi-Geometría:
 ! Las variables espaciales x, y, z representan las dimensiones lógicas x1, x2, x3.
-! Su significado físico (Cartesianas, Cilíndricas o Esféricas) es dictaminado 
+! Su significado físico (Cartesianas, Cilíndricas o Esféricas) es dictaminado
 ! dinámicamente por el módulo de métricas.
 !
 ! Convención Geométrica Estándar (CFD):
@@ -21,13 +21,13 @@ module variables
     ! ==========================================================
     ! ÍNDICES DE ECUACIONES (Vectores de Estado)
     ! ==========================================================
-    integer, parameter :: neq = 5   
-    
-    integer :: eq_de = 1 ! D:  Densidad de masa en reposo conservada (rho * W * sqrt(gamma))
-    integer :: eq_pr = 2 ! tau: Densidad de energía conservada (excluyendo masa en reposo)
-    integer :: eq_vx = 3 ! S_1: Momento en la 1ra dimensión (ej. x, r)
-    integer :: eq_vy = 4 ! S_2: Momento en la 2da dimensión (ej. y, theta)
-    integer :: eq_vz = 5 ! S_3: Momento en la 3ra dimensión (ej. z, phi)
+    integer, parameter :: neq = 5
+
+    integer, parameter :: eq_de = 1 ! D:  Densidad de masa en reposo conservada (rho * W * sqrt(gamma))
+    integer, parameter :: eq_pr = 2 ! tau: Densidad de energía conservada (excluyendo masa en reposo)
+    integer, parameter :: eq_vx = 3 ! S_1: Momento en la 1ra dimensión (ej. x, r)
+    integer, parameter :: eq_vy = 4 ! S_2: Momento en la 2da dimensión (ej. y, theta)
+    integer, parameter :: eq_vz = 5 ! S_3: Momento en la 3ra dimensión (ej. z, phi)
 
     character(len=20), allocatable :: var_names(:)
 
@@ -40,7 +40,7 @@ module variables
     real*8  :: y_min, y_max                 ! Límites físicos de la 2da dimensión
     real*8  :: z_min, z_max                 ! Límites físicos de la 3ra dimensión
     real*8  :: dx, dy, dz                   ! Espaciado constante de la malla lógica
-    
+
     real*8  :: t, dt, final_time            ! Variables de integración temporal
     real*8  :: integration_time             ! Tiempo actual de la simulación
     real*8  :: CFL                          ! Número de Courant-Friedrichs-Lewy
@@ -56,6 +56,8 @@ module variables
 
     ! ==========================================================
     ! ARREGLOS DE ESTADO (HIDRODINÁMICA)
+    ! Layout SoA apto para GPU: [x, y, z, variable]. El primer índice espacial
+    ! es contiguo, por lo que hilos vecinos de un warp leen direcciones vecinas.
     ! ==========================================================
     real*8, allocatable :: u(:,:,:,:)       ! Estado conservativo paso 'n'
     real*8, allocatable :: up(:,:,:,:)      ! Estado intermedio/final paso 'n+1'
@@ -110,8 +112,8 @@ module variables
     ! ==========================================================
     real*8 :: adb_idx                       ! Índice adiabático (Gamma)
     real*8 :: g1                            ! Gamma / (Gamma - 1.0)
-    real*8 :: pi = acos(-1.0d0) 
-    
+    real*8 :: pi = acos(-1.0d0)
+
     real*8 :: bh_mass = 0.0d0               ! Masa del Agujero Negro
     real*8 :: a_spin  = 0.0d0               ! Parámetro de Espín de Kerr (a = J/M)
 
@@ -125,9 +127,23 @@ module variables
     logical :: use_log_r = .false.               ! .true. comprime 1ra dimensión
 
     character(len=30) :: metric_type             ! 'Minkowski', 'Eddington-Finkelstein', 'Kerr'
-    
+
     logical :: is_mhd = .false.                  ! Campos B (Futuro)
     logical :: use_shock_sensor = .true.         ! Fallback reconstrucción
+
+    ! Banderas numéricas para los kernels. Evitan comparar cadenas y usar
+    ! punteros a procedimientos dentro del dispositivo OpenACC.
+    logical :: use_srhd_wavespeeds = .false.
+    logical :: flat_cartesian_sources = .false.
+    logical :: curved_metric = .true.
+    logical :: cylindrical_geometry = .false.
+    logical :: polar_geometry = .false.
+
+#ifdef USE_OPENACC
+    logical, parameter :: accelerator_enabled = .true.
+#else
+    logical, parameter :: accelerator_enabled = .false.
+#endif
 
     logical :: do_mdot_extraction = .false.      ! Extracción de tasa de acreción
     logical :: do_gw_extraction = .false.        ! Extracción de ondas gravitacionales
@@ -154,8 +170,8 @@ module variables
     ! ==========================================================
     ! LÍMITES NUMÉRICOS (Atmósferas y Tolerancias)
     ! ==========================================================
-    real*8, parameter :: tol_v = 1.0d-5 
-    real*8, parameter :: v_max = 1.0d0 - tol_v 
+    real*8, parameter :: tol_v = 1.0d-5
+    real*8, parameter :: v_max = 1.0d0 - tol_v
 
     real*8 :: rho_floor, p_floor
     real*8 :: D_floor, tau_floor
@@ -238,17 +254,17 @@ module variables
 
     integer :: rec_method_id = REC_WENO5
     integer :: tvd_limiter_id = LIM_MC
-    character(len=20) :: scheme_name 
-    character(len=10) :: solver_name 
-    integer :: nghost 
-    
+    character(len=20) :: scheme_name
+    character(len=10) :: solver_name
+    integer :: nghost
+
     ! ==========================================================
     ! ENTRADA/SALIDA (I/O) Y CHECKPOINTS
     ! ==========================================================
-    integer :: case_id 
-    character(len=50) :: case_name 
+    integer :: case_id
+    character(len=50) :: case_name
     character(len=256) :: output_folder
-    character(len=50) :: output_prefix 
+    character(len=50) :: output_prefix
 
     ! El estado siempre se calcula en las coordenadas de la metrica. Esta
     ! opcion solo controla la geometria cartesiana escrita en los VTK.
@@ -256,15 +272,30 @@ module variables
     integer, parameter :: VTK_MAP_UNTWISTED = 2
     integer :: vtk_mapping_id = VTK_MAP_PHYSICAL
 
-    real*8 :: save_interval 
-    real*8 :: next_save_time 
+    real*8 :: save_interval
+    real*8 :: next_save_time
 
-    real*8, allocatable :: michel_injector(:,:,:,:) 
+    real*8, allocatable :: michel_injector(:,:,:,:) ! [ghost radial, y, z, variable]
 
-    real*8 :: checkpoint_interval = 100.0d0 
-    real*8 :: next_checkpoint 
-    logical :: do_restart = .false. 
+    real*8 :: checkpoint_interval = 100.0d0
+    real*8 :: next_checkpoint
+    logical :: do_restart = .false.
     character(len=100) :: restart_file = 'FishboneMoncrief_Equatorial_test/checkpoint_weno5_hlle_08800.rst'
+
+    ! Símbolos de módulo visibles desde rutinas `!$acc routine`. La memoria
+    ! real se crea y puebla después de conocer la malla, en accelerator.f90.
+    !$acc declare create(nx,ny,nz,nghost,dx,dy,dz,adb_idx,g1,rho_floor,p_floor)
+    !$acc declare create(rec_method_id,tvd_limiter_id,riemann_solver_id,use_shock_sensor)
+    !$acc declare create(use_srhd_wavespeeds,flat_cartesian_sources,curved_metric)
+    !$acc declare create(cylindrical_geometry,polar_geometry,case_id)
+    !$acc declare create(jet_ambient_density,jet_ambient_pressure,jet_ambient_velocity)
+    !$acc declare create(jet_nozzle_radius,jet_density,jet_pressure,jet_velocity)
+    !$acc declare create(x,y,z,x_face,y_face,z_face,u,up,p,rhs,michel_injector)
+    !$acc declare create(alpha_c,beta_c,gamma_c,gamma_inv_c,gmunu_c,sqrt_gamma_c)
+    !$acc declare create(chris_c,dg_c,dlna_c)
+    !$acc declare create(alpha_f_x,beta_f_x,gamma_f_x,sqrt_gamma_f_x)
+    !$acc declare create(alpha_f_y,beta_f_y,gamma_f_y,sqrt_gamma_f_y)
+    !$acc declare create(alpha_f_z,beta_f_z,gamma_f_z,sqrt_gamma_f_z)
 
 contains
 

@@ -1,12 +1,12 @@
 ! =======================================================================================
 ! Módulo: fluxes (Solucionadores de Riemann y Velocidades Características)
 ! ---------------------------------------------------------------------------------------
-! Propósito: Resuelve el Problema de Riemann local en cada interfaz de la malla. Dada una 
-! discontinuidad entre un estado izquierdo (q_L) y uno derecho (q_R) arrojados por el 
+! Propósito: Resuelve el Problema de Riemann local en cada interfaz de la malla. Dada una
+! discontinuidad entre un estado izquierdo (q_L) y uno derecho (q_R) arrojados por el
 ! reconstructor espacial, este módulo calcula el flujo numérico neto que cruza la pared.
 !
-! Arquitectura: Funciona como un "Hub" o director. Dependiendo de la variable global 
-! riemann_solver_id, enruta el cálculo hacia esquemas ultra-robustos (HLLE) o esquemas 
+! Arquitectura: Funciona como un "Hub" o director. Dependiendo de la variable global
+! riemann_solver_id, enruta el cálculo hacia esquemas ultra-robustos (HLLE) o esquemas
 ! de altísima nitidez para la onda de contacto (HLLC).
 ! =======================================================================================
 module fluxes
@@ -16,25 +16,9 @@ module fluxes
   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
   private
-  
-  ! Hacemos público el enrutador de Riemann y el inicializador del puntero
+
+  ! Hacemos público el enrutador de Riemann y su inicializador.
   public :: resolve_riemann_problem, init_wavespeed_solver
-
-  ! ====================================================================
-  ! INTERFAZ ABSTRACTA Y DECLARACIÓN DEL PUNTERO
-  ! ====================================================================
-  abstract interface
-    subroutine wavespeed_interface(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
-      implicit none
-      real*8, intent(in)  :: prim_state(:)
-      integer, intent(in) :: sweep_dir
-      real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
-      real*8, intent(out) :: wave_min, wave_max
-    end subroutine wavespeed_interface
-  end interface
-
-  ! Este es el puntero que se comportará como una subrutina normal
-  procedure(wavespeed_interface), pointer, public :: calc_wavespeeds => null()
 
 contains
 
@@ -42,18 +26,33 @@ contains
   ! ENRUTAMIENTO Y ASIGNACIÓN (Llamar al inicio del programa)
   ! ====================================================================
   subroutine init_wavespeed_solver()
-    if (trim(metric_type) == 'Minkowski' .and. trim(geom_type) == 'Cartesian') then
-      calc_wavespeeds => calc_wavespeeds_srhd
-    else
-      calc_wavespeeds => calc_wavespeeds_grhd
-    end if
+    use_srhd_wavespeeds = trim(metric_type) == 'Minkowski' .and. trim(geom_type) == 'Cartesian'
+    flat_cartesian_sources = use_srhd_wavespeeds
+    curved_metric = trim(metric_type) /= 'Minkowski'
+    cylindrical_geometry = trim(geom_type) == 'Cylindrical'
+    polar_geometry = trim(geom_type) == 'Spherical' .or. trim(geom_type) == 'Spheroidal'
   end subroutine init_wavespeed_solver
+
+  subroutine calc_wavespeeds(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
+    !$acc routine seq
+    real*8, intent(in)  :: prim_state(:)
+    integer, intent(in) :: sweep_dir
+    real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
+    real*8, intent(out) :: wave_min, wave_max
+
+    if (use_srhd_wavespeeds) then
+      call calc_wavespeeds_srhd(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
+    else
+      call calc_wavespeeds_grhd(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
+    end if
+  end subroutine calc_wavespeeds
 
 
   ! ====================================================================
   ! SOLUCIONADORES DE RIEMANN
   ! ====================================================================
   subroutine resolve_riemann_problem(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
+    !$acc routine seq
     real*8, intent(in)  :: q_L(:), q_R(:)
     integer, intent(in) :: sweep_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
@@ -65,7 +64,9 @@ contains
     case(RS_HLLC)
       call calc_hllc_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
     case(RS_HLLD)
-      call calc_hlld_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out) ! Futuro MHD
+      ! HLLD aún no es una opción válida en parameters.f90. Mantener aquí
+      ! una ruta algebraica evita I/O/STOP no permitidos dentro de un kernel GPU.
+      call calc_hlle_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
     case default
       call calc_hlle_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
     end select
@@ -74,15 +75,16 @@ contains
 
   ! Subrutina auxiliar para convertir Q -> U usando estrictamente la métrica de la interfaz
   subroutine prim_to_cons_face(prim_state, cons_state, g, sqg)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:), g(3,3), sqg
     real*8, intent(out) :: cons_state(:)
-    
+
     real*8 :: v_sq, h, W, v(3), v_cov(3)
     integer :: ii, jj
 
     v(1) = prim_state(eq_vx); v(2) = prim_state(eq_vy); v(3) = prim_state(eq_vz)
-    
+
     ! Cuadrado de la velocidad Euleriana tridimensional (Tensorial Universal)
     v_sq = 0.0d0
     do ii = 1, 3
@@ -90,7 +92,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     ! --- ESCUDO DE CAUSALIDAD NUMÉRICA ---
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
@@ -112,7 +114,7 @@ contains
 
     cons_state(eq_de) = prim_state(eq_de) * W
     cons_state(eq_pr) = prim_state(eq_de) * h * W**2 - prim_state(eq_pr) - prim_state(eq_de) * W
-    
+
     ! Momentos espaciales covariantes S_i = rho * h * W^2 * v_i
     cons_state(eq_vx) = prim_state(eq_de) * h * W**2 * v_cov(1)
     cons_state(eq_vy) = prim_state(eq_de) * h * W**2 * v_cov(2)
@@ -123,11 +125,12 @@ contains
 
 
   subroutine calc_hlle_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
+    !$acc routine seq
     real*8, intent(in)  :: q_L(:), q_R(:)
     integer, intent(in) :: sweep_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
     real*8, intent(out) :: flux_out(:)
-    
+
     real*8 :: u_L(neq), u_R(neq), f_L(neq), f_R(neq)
     real*8 :: a_plus, a_minus, lambda_L_min, lambda_L_max, lambda_R_min, lambda_R_max
 
@@ -172,6 +175,7 @@ contains
   ! ====================================================================
 
   subroutine calc_hllc_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
+    !$acc routine seq
     real*8, intent(in)  :: q_L(:), q_R(:)
     integer, intent(in) :: sweep_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
@@ -400,6 +404,7 @@ contains
   ! La primera direccion es normal a la superficie coordenada x^d=cte:
   !   e_(1)^i = gamma^(id) / sqrt(gamma^dd).
   subroutine build_face_orthonormal_frame(g, sweep_dir, frame, coframe, gamma_up_dd, ok)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: g(3,3)
     integer, intent(in) :: sweep_dir
@@ -474,6 +479,7 @@ contains
 
 
   real*8 function metric_dot(vector_a, vector_b, g)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: vector_a(3), vector_b(3), g(3,3)
     integer :: i, j
@@ -488,6 +494,7 @@ contains
 
 
   subroutine primitives_to_local_frame(prim_coordinate, coframe, prim_local)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: prim_coordinate(:), coframe(3,3)
     real*8, intent(out) :: prim_local(:)
@@ -507,6 +514,7 @@ contains
   ! Variables conservativas, flujo normal y velocidades extremas SRHD en
   ! una base ortonormal. El orden permanece (D,tau,S_n,S_t1,S_t2).
   subroutine calc_srhd_local_state(prim_local, cons_state, flux_state, wave_min, wave_max, ok)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: prim_local(:)
     real*8, intent(out) :: cons_state(:), flux_state(:), wave_min, wave_max
@@ -569,6 +577,7 @@ contains
 
 
   logical function conservative_state_is_admissible(cons_state)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: cons_state(:)
     real*8 :: total_energy, momentum_sq, admissibility_scale
@@ -595,6 +604,7 @@ contains
   ! al flujo de las variables de Valencia en la base coordenada.
   subroutine local_flux_to_coordinate(cons_local, flux_local, face_speed, alpha, sqg, &
                                       gamma_up_dd, coframe, flux_coordinate, ok)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: cons_local(:), flux_local(:), face_speed
     real*8, intent(in) :: alpha, sqg, gamma_up_dd, coframe(3,3)
@@ -626,10 +636,10 @@ contains
 
   ! ====================================================================
   ! Esqueleto Reservado: Solucionador HLLD (Miyoshi & Kusano 2005 / Mignone 2009)
-  ! Diseñado para Magnetohidrodinámica (MHD). Resuelve 5 ondas incluyendo 
-  ! las discontinuidades de Alfvén. 
+  ! Diseñado para Magnetohidrodinámica (MHD). Resuelve 5 ondas incluyendo
+  ! las discontinuidades de Alfvén.
   ! ====================================================================
-  
+
   subroutine calc_hlld_fluxes(q_L, q_R, sweep_dir, alpha, beta, g, sqg, flux_out)
     real*8, intent(in)  :: q_L(:), q_R(:)
     integer, intent(in) :: sweep_dir
@@ -637,7 +647,7 @@ contains
     real*8, intent(out) :: flux_out(:)
     real*8 :: dummy
     integer :: dummy_int
-    
+
     ! Silenciar warnings del compilador con las nuevas variables
     dummy = q_L(1)
     dummy = q_R(1)
@@ -647,7 +657,7 @@ contains
     dummy = sqg
     flux_out(1) = dummy
     dummy_int = sweep_dir
-    
+
     ! Prevención de seguridad: Detener el código si se llama por accidente
     ! antes de ser programado.
     write(*,*) "=========================================================="
@@ -662,22 +672,23 @@ contains
     ! 2. Cálculo de la velocidad de contacto (lambda_star)
     ! 3. Cálculo de las velocidades de Alfvén (lambda_A_L, lambda_A_R)
     ! 4. Ensamblaje de las 4 regiones intermedias (L*, L**, R**, R*)
-    
+
   end subroutine calc_hlld_fluxes
 
   ! Opción A: Relatividad Especial Pura (SRHD) - Minkowski
   subroutine calc_wavespeeds_srhd(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:)
     integer, intent(in) :: sweep_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
     real*8, intent(out) :: wave_min, wave_max
-    
+
     real*8 :: cs, cs_sq, term1, term2
     real*8 :: eig1, eig2, eig3, enthalpy, v_sq
     real*8 :: v_norm, v(3)
     integer :: ii, jj
-    
+
     v(1) = prim_state(eq_vx); v(2) = prim_state(eq_vy); v(3) = prim_state(eq_vz)
 
     ! Cuadrado de la velocidad Euleriana tridimensional
@@ -687,7 +698,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
       v(2) = v(2) * sqrt(v_max / v_sq)
@@ -703,14 +714,14 @@ contains
       v_norm = v(1)
     else if (sweep_dir == DIR_Y) then
       v_norm = v(2)
-    else 
+    else
       v_norm = v(3)
     end if
 
     ! Ecuaciones simplificadas para fondo plano
     term1 = 1.0d0 / (1.0d0 - v_sq * cs_sq)
     term2 = cs * sqrt((1.0d0 - v_sq) * (1.0d0/term1 - v_norm**2 * (1.0d0 - cs_sq)))
-    
+
     eig1 = v_norm
     eig2 = term1 * (v_norm * (1.0d0 - cs_sq) + term2)
     eig3 = term1 * (v_norm * (1.0d0 - cs_sq) - term2)
@@ -722,18 +733,18 @@ contains
 
   ! Opción B: Relatividad General (GRHD) - Curvo
   subroutine calc_wavespeeds_grhd(prim_state, sweep_dir, alpha, beta, g, sqg, wave_min, wave_max)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:)
     integer, intent(in) :: sweep_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
     real*8, intent(out) :: wave_min, wave_max
-    
+
     real*8 :: cs, cs_sq, term1, term2, det_g
     real*8 :: eig1, eig2, eig3, enthalpy, v_sq
     real*8 :: v_norm, beta_norm, gamma_up_ii
     real*8 :: v(3)
     integer :: ii, jj
-    real*8 :: gamma_up_old, error_ondas
 
     v(1) = prim_state(eq_vx); v(2) = prim_state(eq_vy); v(3) = prim_state(eq_vz)
 
@@ -744,7 +755,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
       v(2) = v(2) * sqrt(v_max / v_sq)
@@ -761,9 +772,9 @@ contains
           - g(1,2)*(g(2,1)*g(3,3) - g(2,3)*g(3,1)) &
           + g(1,3)*(g(2,1)*g(3,2) - g(2,2)*g(3,1))
 
-    ! Extracción analítica del componente contravariante diagonal (gamma^ii) 
+    ! Extracción analítica del componente contravariante diagonal (gamma^ii)
     if (sweep_dir == DIR_X) then
-      v_norm = v(1) ; beta_norm = beta(1) 
+      v_norm = v(1) ; beta_norm = beta(1)
       gamma_up_ii = (g(2,2)*g(3,3) - g(2,3)*g(3,2)) / det_g
     else if (sweep_dir == DIR_Y) then
       v_norm = v(2) ; beta_norm = beta(2)
@@ -775,31 +786,16 @@ contains
 
     ! Ecuaciones exactas acopladas con el lapso, shift y métrica inversa
     term1 = alpha / (1.0d0 - v_sq * cs_sq)
-    
+
     ! Blindaje max(0.0d0) agregado contra ruido de coma flotante extremo
     term2 = cs * sqrt( max(0.0d0, (1.0d0 - v_sq) * (gamma_up_ii * (1.0d0 - v_sq * cs_sq) - v_norm**2 * (1.0d0 - cs_sq))) )
-    
+
     eig1 = alpha * v_norm - beta_norm
     eig2 = term1 * (v_norm * (1.0d0 - cs_sq) + term2) - beta_norm
     eig3 = term1 * (v_norm * (1.0d0 - cs_sq) - term2) - beta_norm
 
     wave_max = max(0.0d0, eig1, eig2, eig3)
     wave_min = min(0.0d0, eig1, eig2, eig3)
-
-
-    ! --- SONDA DE DIAGNÓSTICO DE ONDAS ---
-    if (n_steps == 0 .and. sweep_dir == DIR_X) then
-      gamma_up_old = 1.0d0 / g(1,1)
-      error_ondas = abs(gamma_up_ii - gamma_up_old)
-      
-      if (error_ondas > 1.0d-13) then
-          print *, ">>> ¡ERROR EN VELOCIDADES DE ONDA!"
-          print *, "gamma^11 Cramer =", gamma_up_ii
-          print *, "gamma^11 Viejo  =", gamma_up_old
-          print *, "g_tphi          =", g(1,3) ! Revisar arrastre
-          stop
-      end if
-    end if
   end subroutine calc_wavespeeds_grhd
 
 end module fluxes

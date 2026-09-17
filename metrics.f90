@@ -1,8 +1,8 @@
 ! =======================================================================================
 ! Módulo: metrics (Geometría del Espacio-Tiempo y Gravedad)
 ! ---------------------------------------------------------------------------------------
-! Este módulo define la métrica del espacio-tiempo. Proporciona los factores geométricos 
-! (alpha, beta, gamma) de la descoposición 3+1 (ADM), los símbolos de Christoffel (fuerzas 
+! Este módulo define la métrica del espacio-tiempo. Proporciona los factores geométricos
+! (alpha, beta, gamma) de la descoposición 3+1 (ADM), los símbolos de Christoffel (fuerzas
 ! gravitacionales) y las derivadas de la métrica necesarias para los términos fuente del RHS.
 !
 ! Soporte de Métricas:
@@ -15,10 +15,10 @@ module metrics
   use variables
   implicit none
   private
-  
+
   ! ========================================================================
   ! EXPOSICIÓN PÚBLICA
-  ! Las subrutinas matemáticas son punteros dinámicos. Esto evita usar 'if's 
+  ! Las subrutinas matemáticas son punteros dinámicos. Esto evita usar 'if's
   ! dentro de los bucles de integración temporal, ahorrando tiempo de CPU.
   ! ========================================================================
   public :: calculate_metric, calculate_christoffel_symbols, &
@@ -93,14 +93,14 @@ contains
   ! ========================================================================
   subroutine set_metric_type()
     implicit none
-    
+
     select case(trim(metric_type))
-        
+
       ! ---------------------------------------------------------
       ! ESPACIO PLANO (Sin Gravedad)
       ! ---------------------------------------------------------
       case ('Minkowski')
-        
+
         select case(trim(geom_type))
           case ('Cartesian')
             calculate_metric => metric_minkowski
@@ -109,7 +109,7 @@ contains
             print *, "============================================"
             print *, " METRIC ASSIGNED: Flat Minkowski (Cartesian)"
             print *, "============================================"
-            
+
           case ('Cylindrical')
             calculate_metric => metric_cylindrical
             calculate_christoffel_symbols => christoffel_cylindrical
@@ -117,7 +117,7 @@ contains
             print *, "============================================"
             print *, " METRIC ASSIGNED: Flat Cylindrical (rho, z) "
             print *, "============================================"
-            
+
           case ('Spherical')
             if (use_log_r) then
               calculate_metric => metric_minkowski_spherical_log
@@ -134,7 +134,7 @@ contains
               print *, " METRIC ASSIGNED: Flat Minkowski (Spherical)"
               print *, "============================================"
             end if
-            
+
           case default
             print *, "CRITICAL ERROR: Unrecognized geom_type for Minkowski."
             stop
@@ -144,12 +144,12 @@ contains
       ! AGUJEROS NEGROS SIN ROTACIÓN
       ! ---------------------------------------------------------
       case ('Eddington-Finkelstein')
-        
+
         if (trim(geom_type) /= 'Spherical') then
           print *, "CRITICAL ERROR: EF Metric strictly requires Spherical geometry."
           stop
         end if
-        
+
         if (use_log_r) then
           calculate_metric => metric_ef_log
           calculate_christoffel_symbols => christoffel_ef_log
@@ -166,17 +166,17 @@ contains
           print *, "============================================"
         end if
 
-      
+
       ! ---------------------------------------------------------
       ! AGUJEROS NEGROS CON ROTACIÓN
       ! ---------------------------------------------------------
       case ('Kerr-Schild')
-        
+
         if (trim(geom_type) /= 'Spheroidal') then
           print *, "CRITICAL ERROR: KS Metric strictly requires Spheroidal geometry."
           stop
         end if
-        
+
         if (use_log_r) then
           calculate_metric => metric_ks_log
           calculate_christoffel_symbols => christoffel_ks_log
@@ -192,11 +192,11 @@ contains
           print *, " METRIC ASSIGNED: KS (Physical Spheroidal)   "
           print *, "============================================"
         end if
-        
+
       case default
         print *, "CRITICAL ERROR: Unrecognized metric_type in metric assignment."
         stop
-        
+
     end select
   end subroutine set_metric_type
 
@@ -212,12 +212,12 @@ contains
     real*8, intent(out), optional :: alpha, beta(3), gamma(3,3), det
     real*8, intent(out), optional :: gmunu(0:3, 0:3), dlnalpha(0:3)
     real*8 :: dummy
-    
+
     dummy = x_pos; dummy = y_pos
 
     if (present(alpha)) alpha = 1.0d0
     if (present(beta))  beta  = 0.0d0
-    
+
     ! Matriz espacial diagonal (Identidad)
     if (present(gamma)) then
       gamma = 0.0d0
@@ -225,7 +225,7 @@ contains
       gamma(2,2) = 1.0d0
       gamma(3,3) = 1.0d0
     end if
-    
+
     if (present(det))   det   = 1.0d0
     if (present(dlnalpha)) dlnalpha = 0.0d0
 
@@ -415,19 +415,19 @@ contains
   ! ESPACIO-TIEMPO DE MINKOWSKI CILÍNDRICO AXISIMÉTRICO (rho, phi, z)
   ! Orden del código: x1 = rho, x2 = phi (degenerada), x3 = z (activa).
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  
+
   subroutine metric_cylindrical(x_pos, y_pos, alpha, beta, gamma, gmunu, det, dlnalpha)
     implicit none
     real*8, intent(in) :: x_pos, y_pos
     real*8, intent(out), optional :: alpha, beta(3), gamma(3,3), det
     real*8, intent(out), optional :: gmunu(0:3, 0:3), dlnalpha(0:3)
     real*8 :: dummy
-    
+
     dummy = y_pos
 
     if (present(alpha)) alpha = 1.0d0
     if (present(beta))  beta  = 0.0d0
-    
+
     ! Mapeo del jet: x1 = rho, x2 = phi, x3 = z.
     if (present(gamma)) then
       gamma = 0.0d0
@@ -435,9 +435,9 @@ contains
       gamma(2,2) = x_pos**2  ! g_phiphi = rho^2
       gamma(3,3) = 1.0d0     ! g_zz = 1
     end if
-    
+
     if (present(det)) det = x_pos**2
-    
+
     if (present(dlnalpha)) dlnalpha = 0.0d0
 
     if (present(gmunu)) then
@@ -455,7 +455,7 @@ contains
     real*8, intent(out) :: chris(0:3,0:3,0:3)
     real*8 :: dummy
     dummy = y_pos
-    
+
     chris = 0.0d0
 
     ! Símbolos de Christoffel (x1=rho, x2=phi, x3=z)
@@ -471,10 +471,10 @@ contains
     real*8, intent(in) :: x_pos, y_pos
     real*8, intent(out) :: dg(0:3, 0:3, 1:3)
     real*8 :: dummy
-    
+
     dummy = y_pos
-    dg = 0.0d0 
-    
+    dg = 0.0d0
+
     ! d/drho (g_phiphi) = d/drho (rho^2) = 2rho.
     ! Su contracción con T^{phi phi} produce la fuente radial centrífuga.
     dg(2,2,1) = 2.0d0 * x_pos
@@ -503,7 +503,7 @@ contains
     sin_th = sin(y_pos)
 
     temp_alpha     = 1.0d0 / sqrt(1.0d0 + 2.0d0 * bh_mass / r_phys)
-    
+
     temp_beta(:)   = 0.0d0
     temp_beta(1)   = 2.0d0 * bh_mass / r_phys / (1.0d0 + 2.0d0 * bh_mass / r_phys)
 
@@ -512,7 +512,7 @@ contains
     g33 = (r_phys**2) * (sin_th**2)
 
     temp_det = g11 * g22 * g33
-    
+
     ! Asignación diagonal para la métrica espacial
     temp_gamma = 0.0d0
     temp_gamma(1,1) = g11
@@ -541,7 +541,7 @@ contains
     end if
 
     temp_dlna = 0.0d0
-    temp_dlna(1) = bh_mass / (r_phys**2 + 2.0d0 * bh_mass * r_phys) 
+    temp_dlna(1) = bh_mass / (r_phys**2 + 2.0d0 * bh_mass * r_phys)
 
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
@@ -553,34 +553,34 @@ contains
   subroutine christoffel_ef_phys(r_phys, y_pos, chris)
     implicit none
     real*8, intent(in) :: r_phys, y_pos
-    real*8, intent(out) :: chris(0:3,0:3,0:3) 
+    real*8, intent(out) :: chris(0:3,0:3,0:3)
     real*8 :: sin_th, cos_th, safe_sin
-    
-    chris = 0.0d0 
+
+    chris = 0.0d0
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
-    
+
     ! Blindaje polar preservando el signo para celdas fantasma que cruzan el eje
     safe_sin = sign(max(abs(sin_th), 1.0d-20), sin_th)
-    
+
     chris(0,0,0) = 2.0d0 * bh_mass**2 / r_phys**3
     chris(0,0,1) = bh_mass * (1.0d0 + 2.0d0 * bh_mass / r_phys) / r_phys**2
-    chris(0,1,0) = chris(0,0,1) 
+    chris(0,1,0) = chris(0,0,1)
     chris(0,1,1) = 2.0d0 * bh_mass * (1.0d0 + bh_mass / r_phys) / r_phys**2
     chris(0,2,2) = -2.0d0 * bh_mass
     chris(0,3,3) = chris(0,2,2) * (sin_th**2)
-    
+
     chris(1,0,0) = bh_mass / r_phys**2 * (1.0d0 - 2.0d0 * bh_mass / r_phys)
-    chris(1,0,1) = -chris(0,0,0) 
+    chris(1,0,1) = -chris(0,0,0)
     chris(1,1,0) = chris(1,0,1)
     chris(1,1,1) = -chris(0,0,1)
     chris(1,2,2) = 2.0d0 * bh_mass - r_phys
     chris(1,3,3) = chris(1,2,2) * (sin_th**2)
-    
+
     chris(2,1,2) = 1.0d0 / r_phys
     chris(2,2,1) = chris(2,1,2)
     chris(2,3,3) = -sin_th * cos_th
-    
+
     chris(3,1,3) = 1.0d0 / r_phys
     chris(3,3,1) = chris(3,1,3)
     chris(3,2,3) = cos_th / safe_sin
@@ -590,23 +590,23 @@ contains
   subroutine metric_derivs_ef_phys(r_phys, y_pos, dg)
     implicit none
     real*8, intent(in) :: r_phys, y_pos
-    real*8, intent(out) :: dg(0:3, 0:3, 1:3) 
+    real*8, intent(out) :: dg(0:3, 0:3, 1:3)
     real*8 :: sin_th, cos_th
-    
-    dg = 0.0d0 
+
+    dg = 0.0d0
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
-    
+
     dg(0,0,1) = -2.0d0 * bh_mass / r_phys**2
     dg(0,1,1) = -2.0d0 * bh_mass / r_phys**2
     dg(1,0,1) = dg(0,1,1)
     dg(1,1,1) = -2.0d0 * bh_mass / r_phys**2
     dg(2,2,1) = 2.0d0 * r_phys
     dg(3,3,1) = 2.0d0 * r_phys * (sin_th**2)
-    
+
     dg(3,3,2) = r_phys**2 * 2.0d0 * sin_th * cos_th
     ! SANEAMIENTO 1D: Matar el ruido de punto flotante en el ecuador
-    if (ny == 1) dg(:,:,2) = 0.0d0 
+    if (ny == 1) dg(:,:,2) = 0.0d0
   end subroutine metric_derivs_ef_phys
 
   subroutine metric_ef_log(x_pos, y_pos, alpha, beta, gamma, gmunu, det, dlnalpha)
@@ -626,7 +626,7 @@ contains
 
     ! Función de lapso (Lapse function - Escalar, no cambia)
     temp_alpha     = 1.0d0 / sqrt(1.0d0 + 2.0d0 * bh_mass / r_phys)
-    
+
     ! Vector de desplazamiento LÓGICO (beta^x = beta^r / r)
     temp_beta(:)   = 0.0d0
     temp_beta(1)   = (2.0d0 * bh_mass / r_phys / (1.0d0 + 2.0d0 * bh_mass / r_phys)) / r_phys
@@ -637,7 +637,7 @@ contains
     g33 = (r_phys**2) * (sin_th**2)
 
     temp_det = g11 * g22 * g33
-    
+
     ! Asignación diagonal para la métrica espacial lógica
     temp_gamma = 0.0d0
     temp_gamma(1,1) = g11
@@ -660,7 +660,7 @@ contains
 
     ! Derivada logarítmica del lapso (d_x ln(alpha) = r * d_r ln(alpha))
     temp_dlna = 0.0d0
-    temp_dlna(1) = bh_mass / (r_phys + 2.0d0 * bh_mass) 
+    temp_dlna(1) = bh_mass / (r_phys + 2.0d0 * bh_mass)
 
     if (present(alpha))    alpha    = temp_alpha
     if (present(beta))     beta     = temp_beta
@@ -672,39 +672,39 @@ contains
   subroutine christoffel_ef_log(x_pos, y_pos, chris)
     implicit none
     real*8, intent(in) :: x_pos, y_pos
-    real*8, intent(out) :: chris(0:3,0:3,0:3) 
+    real*8, intent(out) :: chris(0:3,0:3,0:3)
     real*8 :: sin_th, cos_th, r_phys, safe_sin
-    
+
     r_phys = exp(x_pos)
-    chris = 0.0d0 
+    chris = 0.0d0
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
-    
+
     ! Blindaje polar preservando el signo para celdas fantasma que cruzan el eje
     safe_sin = sign(max(abs(sin_th), 1.0d-20), sin_th)
-    
+
     ! Símbolos de Christoffel para EF en coordenadas lógicas (x = ln r)
     chris(0,0,0) = 2.0d0 * bh_mass**2 / r_phys**3
     chris(0,0,1) = bh_mass * (1.0d0 + 2.0d0 * bh_mass / r_phys) / r_phys
-    chris(0,1,0) = chris(0,0,1) 
+    chris(0,1,0) = chris(0,0,1)
     chris(0,1,1) = 2.0d0 * bh_mass * (1.0d0 + bh_mass / r_phys)
     chris(0,2,2) = -2.0d0 * bh_mass
     chris(0,3,3) = chris(0,2,2) * (sin_th**2)
-    
+
     chris(1,0,0) = bh_mass / r_phys**3 * (1.0d0 - 2.0d0 * bh_mass / r_phys)
     chris(1,0,1) = -2.0d0 * bh_mass**2 / r_phys**3
     chris(1,1,0) = chris(1,0,1)
-    
+
     ! Incluye el término no inercial d^2r/dx^2 de la transformación de coordenadas
     chris(1,1,1) = 1.0d0 - bh_mass / r_phys - 2.0d0 * bh_mass**2 / r_phys**2
     chris(1,2,2) = 2.0d0 * bh_mass / r_phys - 1.0d0
     chris(1,3,3) = chris(1,2,2) * (sin_th**2)
-    
+
     ! Las componentes transversales se simplifican enormemente
     chris(2,1,2) = 1.0d0
     chris(2,2,1) = chris(2,1,2)
     chris(2,3,3) = -sin_th * cos_th
-    
+
     chris(3,1,3) = 1.0d0
     chris(3,3,1) = chris(3,1,3)
     chris(3,2,3) = cos_th / safe_sin
@@ -714,31 +714,31 @@ contains
   subroutine metric_derivs_ef_log(x_pos, y_pos, dg)
     implicit none
     real*8, intent(in) :: x_pos, y_pos
-    real*8, intent(out) :: dg(0:3, 0:3, 1:3) 
+    real*8, intent(out) :: dg(0:3, 0:3, 1:3)
     real*8 :: sin_th, cos_th, r_phys
-    
-    dg = 0.0d0 
+
+    dg = 0.0d0
     r_phys = exp(x_pos)
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
-    
+
     ! Derivadas respecto a x (dirección 1). Recordar d_x = r * d_r
     ! g_00_log = -1 + 2M/r
     dg(0,0,1) = -2.0d0 * bh_mass / r_phys
-    
+
     ! g_01_log = r * g_01_phys = r * (2M/r) = 2M (¡Es constante en x!)
     dg(0,1,1) = 0.0d0
     dg(1,0,1) = dg(0,1,1)
-    
+
     ! g_11_log = r^2 * g_11_phys = r^2 * (1 + 2M/r) = r^2 + 2Mr
     dg(1,1,1) = 2.0d0 * r_phys**2 + 2.0d0 * bh_mass * r_phys
-    
+
     ! g_22_log = r^2
     dg(2,2,1) = 2.0d0 * r_phys**2
-    
+
     ! g_33_log = r^2 * sin^2(th)
     dg(3,3,1) = 2.0d0 * (r_phys**2) * (sin_th**2)
-    
+
     ! Derivadas respecto a theta (dirección 2)
     dg(3,3,2) = 2.0d0 * (r_phys**2) * sin_th * cos_th
     ! SANEAMIENTO 1D: Matar el ruido de punto flotante en el ecuador
@@ -781,7 +781,7 @@ contains
     temp_beta(:) = 0.0d0
     temp_beta(1) = 2.0d0 * H / (1.0d0 + 2.0d0 * H)
     ! beta^theta = 0.0d0
-    ! beta^phi   = 0.0d0 
+    ! beta^phi   = 0.0d0
 
     ! 3. Métrica espacial covariante (gamma_ij)
     ! Es exactamente el bloque 3x3 inferior derecho de tu matriz de Maple
@@ -823,7 +823,7 @@ contains
         real*8 :: dH_dr, dH_dth
         dH_dr = M * (a**2 * cos2 - r_phys**2) / (Sigma**2)
         dH_dth = 2.0d0 * M * r_phys * a**2 * sin_th * cos_th / (Sigma**2)
-        
+
         temp_dlna(1) = - dH_dr / (1.0d0 + 2.0d0 * H)
         temp_dlna(2) = - dH_dth / (1.0d0 + 2.0d0 * H)
     end block
@@ -844,79 +844,79 @@ contains
   subroutine metric_derivs_ks_phys(r_phys, y_pos, dg)
     implicit none
     real*8, intent(in) :: r_phys, y_pos
-    real*8, intent(out) :: dg(0:3, 0:3, 1:3) 
-    
+    real*8, intent(out) :: dg(0:3, 0:3, 1:3)
+
     real*8 :: a, M, Sigma, H, sin_th, cos_th, sin2, cos2
     real*8 :: dS_dr, dS_dth, dH_dr, dH_dth
-    
+
     M = bh_mass
     a = a_spin
-    
+
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
     sin2 = sin_th**2
     cos2 = cos_th**2
-    
+
     Sigma = r_phys**2 + a**2 * cos2
     H = M * r_phys / Sigma
-    
+
     ! Derivadas auxiliares de Sigma y H
     dS_dr = 2.0d0 * r_phys
     dS_dth = -2.0d0 * a**2 * sin_th * cos_th
-    
+
     dH_dr = M * (a**2 * cos2 - r_phys**2) / (Sigma**2)
     dH_dth = 2.0d0 * M * r_phys * a**2 * sin_th * cos_th / (Sigma**2)
-    
+
     dg = 0.0d0
-    
+
     ! ---------------------------------------------------------
     ! Derivadas respecto a R (k=1)
     ! ---------------------------------------------------------
     dg(0,0,1) = 2.0d0 * dH_dr
-    
+
     dg(0,1,1) = 2.0d0 * dH_dr
     dg(1,0,1) = dg(0,1,1)
-    
+
     dg(0,3,1) = -2.0d0 * a * sin2 * dH_dr
     dg(3,0,1) = dg(0,3,1)
-    
+
     dg(1,1,1) = 2.0d0 * dH_dr
-    
+
     dg(1,3,1) = -a * sin2 * (2.0d0 * dH_dr)
     dg(3,1,1) = dg(1,3,1)
-    
+
     dg(2,2,1) = dS_dr
     dg(3,3,1) = 2.0d0 * r_phys * sin2 + 2.0d0 * a**2 * (sin2**2) * dH_dr
-    
+
     ! ---------------------------------------------------------
     ! Derivadas respecto a THETA (k=2)
     ! ---------------------------------------------------------
     dg(0,0,2) = 2.0d0 * dH_dth
-    
+
     dg(0,1,2) = 2.0d0 * dH_dth
     dg(1,0,2) = dg(0,1,2)
-    
+
     dg(0,3,2) = -2.0d0 * a * (sin2 * dH_dth + 2.0d0 * H * sin_th * cos_th)
     dg(3,0,2) = dg(0,3,2)
-    
+
     dg(1,1,2) = 2.0d0 * dH_dth
-    
+
     dg(1,3,2) = -a * ( (1.0d0 + 2.0d0 * H) * 2.0d0 * sin_th * cos_th + sin2 * 2.0d0 * dH_dth )
     dg(3,1,2) = dg(1,3,2)
-    
+
     dg(2,2,2) = dS_dth
-    
+
     dg(3,3,2) = 2.0d0 * (r_phys**2 + a**2) * sin_th * cos_th + &
                 2.0d0 * a**2 * (sin2**2) * dH_dth + &
                 8.0d0 * a**2 * H * sin_th * cos_th * sin2
-    
+
     ! =========================================================
     ! SANEAMIENTO ECUATORIAL (BLINDAJE NUMÉRICO)
-    ! Si la malla es puramente ecuatorial (ny == 1), TODAS las 
-    ! derivadas en theta deben ser matemáticamente cero. Esto 
+    ! Si la malla es puramente ecuatorial (ny == 1), TODAS las
+    ! derivadas en theta deben ser matemáticamente cero. Esto
     ! mata el residuo de cos(pi/2) ~ 1e-17.
     ! =========================================================
-    if (ny == 1) dg(:,:,2) = 0.0d0 
+    if (ny == 1) dg(:,:,2) = 0.0d0
 
   end subroutine metric_derivs_ks_phys
 
@@ -927,33 +927,33 @@ contains
     implicit none
     real*8, intent(in) :: r_phys, y_pos
     real*8, intent(out) :: chris(0:3,0:3,0:3)
-    
+
     real*8 :: gmunu_up(0:3, 0:3)
     real*8 :: dg(0:3, 0:3, 1:3)
     integer :: lambda, mu, nu, rho
     real*8 :: d_mu_g, d_nu_g, d_rho_g
-    
+
     ! 1. Obtenemos el contravariante analítico (g^munu)
     call metric_ks_phys(r_phys, y_pos, gmunu=gmunu_up)
-    
+
     ! 2. Obtenemos las derivadas analíticas exactas (d_k g_munu)
     call metric_derivs_ks_phys(r_phys, y_pos, dg)
-    
+
     chris = 0.0d0
-    
+
     ! 3. Contracción tensorial optimizada (Solo 40 cálculos en lugar de 64)
     ! Gamma^lambda_{mu nu} = 0.5 * g^{lambda rho} * ( d_mu g_{rho nu} + d_nu g_{rho mu} - d_rho g_{mu nu} )
     do lambda = 0, 3
       do mu = 0, 3
         ! OJO AQUÍ: El bucle 'nu' empieza en 'mu' para aprovechar la simetría
         do nu = mu, 3
-          
+
           ! Sumatoria sobre el índice mudo 'rho'
           do rho = 0, 3
             d_mu_g = 0.0d0
             d_nu_g = 0.0d0
             d_rho_g = 0.0d0
-            
+
             ! Solo existen derivadas en las direcciones espaciales r (1) y theta (2).
             ! Los CASE con indices constantes evitan formar accidentalmente dg(:,:,0).
             select case (mu)
@@ -974,16 +974,16 @@ contains
             case (2)
               d_rho_g = dg(mu, nu, 2)
             end select
-            
+
             chris(lambda, mu, nu) = chris(lambda, mu, nu) + &
               0.5d0 * gmunu_up(lambda, rho) * (d_mu_g + d_nu_g - d_rho_g)
           end do
-          
+
           ! 4. Clonamos inmediatamente el resultado al índice simétrico
           if (mu /= nu) then
             chris(lambda, nu, mu) = chris(lambda, mu, nu)
           end if
-          
+
         end do
       end do
     end do
@@ -1008,7 +1008,7 @@ contains
     real*8 :: temp_gmunu(0:3, 0:3), temp_dlna(0:3)
 
     M = bh_mass
-    a = a_spin 
+    a = a_spin
     r_phys = exp(x_pos)
 
     sin_th = sin(y_pos)
@@ -1028,7 +1028,7 @@ contains
     temp_beta(1) = (2.0d0 * H / (1.0d0 + 2.0d0 * H)) / r_phys
 
     ! 3. Métrica espacial LÓGICA covariante (gamma_ij_log)
-    ! Aplicando las reglas de transformación: 
+    ! Aplicando las reglas de transformación:
     ! gamma_xx = r^2 * gamma_rr  |  gamma_xphi = r * gamma_rphi
     temp_gamma = 0.0d0
     temp_gamma(1,1) = (1.0d0 + 2.0d0 * H) * r_phys**2
@@ -1072,7 +1072,7 @@ contains
         real*8 :: dH_dr, dH_dth
         dH_dr = M * (a**2 * cos2 - r_phys**2) / (Sigma**2)
         dH_dth = 2.0d0 * M * r_phys * a**2 * sin_th * cos_th / (Sigma**2)
-        
+
         temp_dlna(1) = - (dH_dr * r_phys) / (1.0d0 + 2.0d0 * H)
         temp_dlna(2) = - dH_dth / (1.0d0 + 2.0d0 * H)
     end block
@@ -1091,91 +1091,91 @@ contains
   subroutine metric_derivs_ks_log(x_pos, y_pos, dg)
     implicit none
     real*8, intent(in) :: x_pos, y_pos
-    real*8, intent(out) :: dg(0:3, 0:3, 1:3) 
-    
+    real*8, intent(out) :: dg(0:3, 0:3, 1:3)
+
     real*8 :: a, M, Sigma, H, sin_th, cos_th, sin2, cos2, r_phys
     real*8 :: dS_dth, dH_dr, dH_dth
     real*8 :: g_tr_phys, g_rr_phys, g_rphi_phys
-    
+
     M = bh_mass
     a = a_spin
     r_phys = exp(x_pos)
-    
+
     sin_th = sin(y_pos)
     cos_th = cos(y_pos)
     sin2 = sin_th**2
     cos2 = cos_th**2
-    
+
     Sigma = r_phys**2 + a**2 * cos2
     H = M * r_phys / Sigma
-    
+
     dS_dth = -2.0d0 * a**2 * sin_th * cos_th
     dH_dr = M * (a**2 * cos2 - r_phys**2) / (Sigma**2)
     dH_dth = 2.0d0 * M * r_phys * a**2 * sin_th * cos_th / (Sigma**2)
-    
+
     ! Componentes físicas puras requeridas para derivar los productos (Regla de Leibniz)
     g_tr_phys = 2.0d0 * H
     g_rr_phys = 1.0d0 + 2.0d0 * H
     g_rphi_phys = -a * (1.0d0 + 2.0d0 * H) * sin2
-    
+
     dg = 0.0d0
-    
+
     ! ---------------------------------------------------------
-    ! Derivadas respecto a X (k=1). 
+    ! Derivadas respecto a X (k=1).
     ! Aplicando: d_x ( f(r) ) = r * d_r ( f(r) )
     ! ---------------------------------------------------------
-    
+
     ! g_tt_log = g_tt_phys
     dg(0,0,1) = r_phys * (2.0d0 * dH_dr)
-    
+
     ! d_x(r * g_tr_phys) = r * g_tr_phys + r^2 * d_r(g_tr_phys)
     dg(0,1,1) = r_phys * g_tr_phys + r_phys**2 * (2.0d0 * dH_dr)
     dg(1,0,1) = dg(0,1,1)
-    
+
     ! g_tphi_log = g_tphi_phys
     dg(0,3,1) = r_phys * (-2.0d0 * a * sin2 * dH_dr)
     dg(3,0,1) = dg(0,3,1)
-    
+
     ! d_x(r^2 * g_rr_phys) = 2r^2 * g_rr_phys + r^3 * d_r(g_rr_phys)
     dg(1,1,1) = 2.0d0 * r_phys**2 * g_rr_phys + r_phys**3 * (2.0d0 * dH_dr)
-    
+
     ! d_x(r * g_rphi_phys) = r * g_rphi_phys + r^2 * d_r(g_rphi_phys)
     dg(1,3,1) = r_phys * g_rphi_phys + r_phys**2 * (-2.0d0 * a * sin2 * dH_dr)
     dg(3,1,1) = dg(1,3,1)
-    
+
     ! d_x(Sigma) = r * d_r(Sigma) = r * (2r) = 2r^2
     dg(2,2,1) = 2.0d0 * r_phys**2
-    
+
     ! g_phiphi_log = g_phiphi_phys
     dg(3,3,1) = r_phys * (2.0d0 * r_phys * sin2 + 2.0d0 * a**2 * sin2**2 * dH_dr)
-    
+
     ! ---------------------------------------------------------
     ! Derivadas respecto a THETA (k=2)
     ! d_theta ( f(r, theta) ) de los componentes mapeados lógicamente
     ! ---------------------------------------------------------
     dg(0,0,2) = 2.0d0 * dH_dth
-    
+
     dg(0,1,2) = r_phys * (2.0d0 * dH_dth)
     dg(1,0,2) = dg(0,1,2)
-    
+
     dg(0,3,2) = -2.0d0 * a * (sin2 * dH_dth + 2.0d0 * H * sin_th * cos_th)
     dg(3,0,2) = dg(0,3,2)
-    
+
     dg(1,1,2) = r_phys**2 * (2.0d0 * dH_dth)
-    
+
     dg(1,3,2) = r_phys * ( -a * ( (1.0d0 + 2.0d0 * H) * 2.0d0 * sin_th * cos_th + sin2 * 2.0d0 * dH_dth ) )
     dg(3,1,2) = dg(1,3,2)
-    
+
     dg(2,2,2) = dS_dth
-    
+
     dg(3,3,2) = 2.0d0 * (r_phys**2 + a**2) * sin_th * cos_th + &
                 2.0d0 * a**2 * (sin2**2) * dH_dth + &
                 8.0d0 * a**2 * H * sin_th * cos_th * sin2
-    
+
     ! =========================================================
     ! SANEAMIENTO ECUATORIAL (BLINDAJE NUMÉRICO)
     ! =========================================================
-    if (ny == 1) dg(:,:,2) = 0.0d0 
+    if (ny == 1) dg(:,:,2) = 0.0d0
 
   end subroutine metric_derivs_ks_log
 
@@ -1187,28 +1187,28 @@ contains
     implicit none
     real*8, intent(in) :: x_pos, y_pos
     real*8, intent(out) :: chris(0:3,0:3,0:3)
-    
+
     real*8 :: gmunu_up(0:3, 0:3)
     real*8 :: dg(0:3, 0:3, 1:3)
     integer :: lambda, mu, nu, rho
     real*8 :: d_mu_g, d_nu_g, d_rho_g
-    
+
     ! Extraemos los tensores lógicos
     call metric_ks_log(x_pos, y_pos, gmunu=gmunu_up)
     call metric_derivs_ks_log(x_pos, y_pos, dg)
-    
+
     chris = 0.0d0
-    
+
     ! Contracción tensorial (Cálculo idéntico, la geometría diferencial se encarga de la lógica)
     do lambda = 0, 3
       do mu = 0, 3
         do nu = mu, 3
-          
+
           do rho = 0, 3
             d_mu_g = 0.0d0
             d_nu_g = 0.0d0
             d_rho_g = 0.0d0
-            
+
             select case (mu)
             case (1)
               d_mu_g = dg(rho, nu, 1)
@@ -1227,15 +1227,15 @@ contains
             case (2)
               d_rho_g = dg(mu, nu, 2)
             end select
-            
+
             chris(lambda, mu, nu) = chris(lambda, mu, nu) + &
               0.5d0 * gmunu_up(lambda, rho) * (d_mu_g + d_nu_g - d_rho_g)
           end do
-          
+
           if (mu /= nu) then
             chris(lambda, nu, mu) = chris(lambda, mu, nu)
           end if
-          
+
         end do
       end do
     end do
@@ -1249,11 +1249,12 @@ contains
   ! %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
   subroutine calculate_stress_energy_tensor(prim_state, i, j, k, Tmunu)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: prim_state(:)
     integer, intent(in) :: i, j, k
     real*8, intent(out) :: Tmunu(0:3,0:3)
-    
+
     real*8 :: alpha, beta(3), g(3,3), gmunu(0:3,0:3)
     real*8 :: v_sq, h, W, u_four(0:3)
     real*8 :: v(3)
@@ -1276,7 +1277,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     ! Limitador relativista de seguridad (previene superar c)
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
@@ -1292,9 +1293,9 @@ contains
     ! Cuadrivector de velocidad u^mu
     u_four = 0.0d0
     u_four(0) = W / alpha
-    u_four(1) = W * (v(1) - beta(1) / alpha) 
-    u_four(2) = W * (v(2) - beta(2) / alpha) 
-    u_four(3) = W * (v(3) - beta(3) / alpha) 
+    u_four(1) = W * (v(1) - beta(1) / alpha)
+    u_four(2) = W * (v(2) - beta(2) / alpha)
+    u_four(3) = W * (v(3) - beta(3) / alpha)
 
     ! Ensamblaje del Tensor de Energía-Momento contravariante
     Tmunu = 0.0d0 ! T^mu^nu = rho * h * u^mu * u^nu + p * g^mu^nu

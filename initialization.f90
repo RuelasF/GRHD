@@ -1,7 +1,7 @@
 ! =======================================================================================
 ! Módulo: initialization (Configuración de la Malla y Parámetros del Problema)
 ! ---------------------------------------------------------------------------------------
-! Este módulo orquesta el arranque de la simulación. Se encarga de alojar dinámicamente 
+! Este módulo orquesta el arranque de la simulación. Se encarga de alojar dinámicamente
 ! la memoria RAM según la resolución deseada, construir la malla espacial (Grid) asegurando
 ! una topología Cell-Centered, y establecer el entorno físico base.
 ! =======================================================================================
@@ -93,7 +93,7 @@ contains
       x_min = r_min
       x_max = r_max
     end if
-    
+
     ! Prevención de división por cero para dominios degradados (ej. casos 1D o 2D)
     dx = (x_max - x_min) / dble(max(1, nx))
     dy = (y_max - y_min) / dble(max(1, ny))
@@ -129,7 +129,7 @@ contains
       else
          r_horizon_coord = r_horizon_phys
       end if
-      
+
       if (r_horizon_coord < x_face(0)) then
         ! El horizonte está excisado: la primera celda es la sonda exterior.
         idx_horizon = 0
@@ -184,7 +184,7 @@ contains
       idx_horizon = 0
       idx_probe = 0
     end if
-    
+
     ! -------------------------------------------------------------
     ! Generación de Malla en Y (Polar / Sagital)
     ! -------------------------------------------------------------
@@ -206,14 +206,14 @@ contains
     end do
 
     ! -------------------------------------------------------------
-    ! ALOJAMIENTO MASIVO DE RAM (4D: [Ecuaciones, X, Y, Z])
+    ! ALOJAMIENTO MASIVO (4D SoA: [X, Y, Z, Ecuaciones])
     ! -------------------------------------------------------------
-    allocate(u(neq, 1:nx, 1:ny, 1:nz))
-    allocate(up(neq, 1:nx, 1:ny, 1:nz))
-    allocate(s(neq, 1:nx, 1:ny, 1:nz))
-    allocate(rhs(neq, 1:nx, 1:ny, 1:nz))
-    allocate(p(neq, -nghost:nx+nghost, -nghost:ny+nghost, -nghost:nz+nghost))
-    
+    allocate(u(1:nx,1:ny,1:nz,neq))
+    allocate(up(1:nx,1:ny,1:nz,neq))
+    allocate(s(1:nx,1:ny,1:nz,neq))
+    allocate(rhs(1:nx,1:ny,1:nz,neq))
+    allocate(p(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
+
     ! Etiquetas de exportación para software de visualización (VisIt, Paraview)
     if (.not. allocated(var_names)) allocate(var_names(neq))
     var_names(eq_de) = 'Density'
@@ -237,12 +237,10 @@ contains
     allocate(dlna_c(0:3, 1:nx, 1:ny, 1:nz))
 
     ! 2. Interfaces X (1:nx+1, 1:ny, 1:nz)
-    if (nx > 1) then
-      allocate(alpha_f_x(1:nx+1, 1:ny, 1:nz))
-      allocate(beta_f_x(3, 1:nx+1, 1:ny, 1:nz))
-      allocate(gamma_f_x(3, 3, 1:nx+1, 1:ny, 1:nz))
-      allocate(sqrt_gamma_f_x(1:nx+1, 1:ny, 1:nz))
-    end if
+    allocate(alpha_f_x(1:nx+1, 1:ny, 1:nz))
+    allocate(beta_f_x(3, 1:nx+1, 1:ny, 1:nz))
+    allocate(gamma_f_x(3, 3, 1:nx+1, 1:ny, 1:nz))
+    allocate(sqrt_gamma_f_x(1:nx+1, 1:ny, 1:nz))
 
     ! 3. Interfaces Y (1:nx, 1:ny+1, 1:nz)
     if (ny > 1) then
@@ -283,7 +281,7 @@ contains
           call calculate_metric(x(i), y(j), alpha=a, beta=b, gamma=g, gmunu=gmunu_loc, det=det_local, dlnalpha=dlna_local)
           call calculate_christoffel_symbols(x(i), y(j), chris_local)
           call calculate_metric_derivatives(x(i), y(j), dg_local)
-          
+
           alpha_c(i,j,k) = a
           beta_c(:,i,j,k) = b(:)
           gamma_c(:,:,i,j,k) = g(:,:)
@@ -297,7 +295,7 @@ contains
               gamma_inv_c(ii,jj,i,j,k) = gmunu_loc(ii,jj) + (b(ii) * b(jj)) / (a**2)
             end do
           end do
-          
+
           ! --- CÁLCULO DE LA INVERSA ESPACIAL (Regla de Cramer Exacta) ---
           ! Usamos el det_local analítico puro para garantizar consistencia de bits.
           ! gamma_inv_c(1,1,i,j,k) = (g(2,2)*g(3,3) - g(2,3)*g(3,2)) / det_local
@@ -323,22 +321,20 @@ contains
     ! ========================================================
     ! 2. MÉTRICA EN LAS INTERFACES X
     ! ========================================================
-    if (nx > 1) then
-      !$OMP PARALLEL DO PRIVATE(i, j, k, a, b, g, det_local) COLLAPSE(3)
-      do k = 1, nz
-        do j = 1, ny
-          do i = 1, nx+1
-            call calculate_metric(x_face(i-1), y(j), alpha=a, beta=b, gamma=g, det=det_local)
-            
-            alpha_f_x(i,j,k) = a
-            beta_f_x(:,i,j,k) = b(:)
-            gamma_f_x(:,:,i,j,k) = g(:,:)
-            sqrt_gamma_f_x(i,j,k) = sqrt(det_local)
-          end do
+    !$OMP PARALLEL DO PRIVATE(i, j, k, a, b, g, det_local) COLLAPSE(3)
+    do k = 1, nz
+      do j = 1, ny
+        do i = 1, nx+1
+          call calculate_metric(x_face(i-1), y(j), alpha=a, beta=b, gamma=g, det=det_local)
+
+          alpha_f_x(i,j,k) = a
+          beta_f_x(:,i,j,k) = b(:)
+          gamma_f_x(:,:,i,j,k) = g(:,:)
+          sqrt_gamma_f_x(i,j,k) = sqrt(det_local)
         end do
       end do
-      !$OMP END PARALLEL DO
-    end if
+    end do
+    !$OMP END PARALLEL DO
 
     ! ========================================================
     ! 3. MÉTRICA EN LAS INTERFACES Y
@@ -349,7 +345,7 @@ contains
         do j = 1, ny+1
           do i = 1, nx
             call calculate_metric(x(i), y_face(j-1), alpha=a, beta=b, gamma=g, det=det_local)
-            
+
             alpha_f_y(i,j,k) = a
             beta_f_y(:,i,j,k) = b(:)
             gamma_f_y(:,:,i,j,k) = g(:,:)
@@ -377,7 +373,7 @@ contains
         do j = 1, ny
           do i = 1, nx
             call calculate_metric(x(i), y(j), alpha=a, beta=b, gamma=g, det=det_local)
-            
+
             alpha_f_z(i,j,k) = a
             beta_f_z(:,i,j,k) = b(:)
             gamma_f_z(:,:,i,j,k) = g(:,:)
@@ -450,7 +446,7 @@ contains
 
     ! Inicialización de constantes termodinámicas universales
     g1 = adb_idx / (adb_idx - 1.0d0)
-    
+
     rho_floor = 1.0d-10
     p_floor   = rho_floor * 1.0d-3
     D_floor   = rho_floor
@@ -494,15 +490,15 @@ contains
     sod_rho_right = 0.125d0
     sod_pressure_left = 1.0d0
     sod_pressure_right = 0.1d0
-    
+
     nx = 200 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
     nz = 1   ; z_min = 0.0d0 ; z_max = 1.0d0
-    
+
     final_time = 0.4d0
     CFL = 0.4d0
     save_interval = 0.1d0
-    
+
     output_prefix = 'Sod'
     output_folder = 'ShockTubes'
   end subroutine setup_sod
@@ -521,15 +517,15 @@ contains
     strong_rho_right = 1.0d0
     strong_pressure_left = 1000.0d0
     strong_pressure_right = 0.01d0
-    
+
     nx = 400 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
     nz = 1   ; z_min = 0.0d0 ; z_max = 1.0d0
-    
+
     final_time = 0.4d0
     CFL = 0.4d0
     save_interval = 0.1d0
-    
+
     output_prefix = 'Strong'
     output_folder = 'ShockTubes'
   end subroutine setup_strong_shock
@@ -550,15 +546,15 @@ contains
     shu_rho_amplitude = 0.3d0
     shu_wave_number = 50.0d0
     shu_pressure_right = 5.0d0
-    
+
     nx = 400 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = 1.0d0
     nz = 1   ; z_min = 0.0d0 ; z_max = 1.0d0
-    
+
     final_time = 0.4d0
     CFL = 0.4d0
     save_interval = 0.1d0
-    
+
     output_prefix = 'Shu'
     output_folder = 'ShockTubes'
   end subroutine setup_shu_osher
@@ -581,15 +577,15 @@ contains
     khi_perturbation_amplitude = 0.01d0
     khi_perturbation_wave_number = 10.0d0
     khi_perturbation_width = 0.05d0
-    
+
     nx = 400 ; r_min = -0.5d0 ; r_max = 0.5d0
     ny = 1   ; y_min = 0.0d0  ; y_max = 1.0d0
     nz = 400 ; z_min = -0.5d0 ; z_max = 0.5d0
 
-    final_time = 3.0d0 
+    final_time = 3.0d0
     CFL = 0.25d0       ! CFL conservador para domar inestabilidades cruzadas
     save_interval = 0.1d0
-    
+
     output_prefix = 'KHI'
     output_folder = 'KelvinHelmholtz'
   end subroutine setup_kelvin_helmholtz
@@ -611,17 +607,17 @@ contains
     jet_density = 0.1d0
     jet_pressure = 0.01d0
     jet_velocity = 0.99d0
-    
+
     ! Dominio de Del Zanna (Astrofísica Clásica)
     nx = 320 ; r_min = 0.0d0 ; r_max = 16.0d0
     ! Una sola celda azimutal centrada en phi=pi/2: el VTK queda en el plano Y-Z.
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
     nz = 800 ; z_min = 0.0d0 ; z_max = 40.0d0
 
-    final_time = 120.0d0 
-    CFL = 0.25d0        
+    final_time = 120.0d0
+    CFL = 0.25d0
     save_interval = 1.0d0
-    
+
     output_prefix = 'JET'
     output_folder = 'AxisymmetricJet_extreme'
   end subroutine setup_axisymmetric_jet
@@ -640,15 +636,15 @@ contains
     advected_wave_speed = 0.5d0
     advected_wave_pressure = 1.0d0
     advected_wave_number = 2.0d0
-    
+
     nx = 2048 ; r_min = 0.0d0 ; r_max = 1.0d0
     ny = 1    ; y_min = 0.0d0 ; y_max = 1.0d0
     nz = 1    ; z_min = 0.0d0 ; z_max = 1.0d0
-    
+
     final_time = 0.7d0
     CFL = 0.10d0
     save_interval = 0.1d0
-    
+
     output_prefix = 'Conv'
     output_folder = 'ConvergenceTest_N2048'
   end subroutine setup_convergence_test
@@ -665,18 +661,18 @@ contains
     bh_mass = 1.0d0
     michel_critical_radius = 100.0d0
     michel_critical_density = 0.1d0
-    
+
     nx = 400 ; r_min = 1.01d0 ; r_max = 51.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0d0 * pi
 
     ! Activa esto cuando quieras máxima resolución cerca del horizonte
-    ! use_log_r = .true. 
-    
+    ! use_log_r = .true.
+
     final_time = 500.0d0
     CFL = 0.5d0
     save_interval = 1.0d0
-    
+
     output_prefix = 'MA'
     output_folder = 'Michel_test_2D'
   end subroutine setup_michel_accretion
@@ -692,15 +688,15 @@ contains
     adb_idx = 4.0d0 / 3.0d0
     bh_mass = 1.0d0
     dust_accretion_constant = -0.5d0
-    
+
     nx = 500 ; r_min = 1.0d0 ; r_max = 51.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
-    nz = 4   ; z_min = 0.0d0 ; z_max = 2.0d0 * pi 
-    
+    nz = 4   ; z_min = 0.0d0 ; z_max = 2.0d0 * pi
+
     final_time = 500.0d0
     CFL = 0.5d0
     save_interval = 50.0d0
-    
+
     output_prefix = 'D'
     output_folder = 'Dust2D'
   end subroutine setup_dust_accretion
@@ -722,7 +718,7 @@ contains
     offaxis_background_pressure = 0.1d0
     offaxis_density_amplitude = 1.0d0
     offaxis_pressure_amplitude = 1.0d0
-    
+
     nx = 400 ; r_min = 1.0d0 ; r_max = 121.0d0
     ny = 1   ; y_min = 0.0d0 ; y_max = pi
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0d0*pi
@@ -730,7 +726,7 @@ contains
     final_time = 2000.0d0
     CFL = 0.4d0
     save_interval = 25.0d0
-    
+
     output_prefix = 'OR'
     output_folder = 'OffAxis'
   end subroutine setup_offaxis_blast
@@ -751,16 +747,16 @@ contains
     fm_inner_radius = 6.25d0
     fm_pressure_max_radius = 9.25d0
     fm_polytropic_constant = 0.0015d0
-    
+
     ! Caso original Ecuatorial (1D/2D en phi)
     nx = 400 ; r_min = 1.2d0 ; r_max = 40.0d0
     ny = 1   ; y_min = 0     ; y_max = pi     ! Fijo en el ecuador
     nz = 200 ; z_min = 0.0d0 ; z_max = 2.0d0*pi
 
     final_time = 1000.0d0
-    CFL = 0.4d0            
-    save_interval = 10.0d0   
-    
+    CFL = 0.4d0
+    save_interval = 10.0d0
+
     output_prefix = 'FM_KS_a0.9d0'
     output_folder = 'FM_KS_a0.9d0_data'
   end subroutine setup_fishbone_moncrief_equatorial
@@ -779,15 +775,15 @@ contains
     fm_inner_radius = 6.25d0
     fm_pressure_max_radius = 9.25d0
     fm_polytropic_constant = 0.0015d0
-    
+
     nx = 400 ; r_min = 2.0d0 ; r_max = 200.0d0
     ny = 200 ; y_min = 0.0d0 ; y_max = pi      ! De Polo a Polo
     nz = 1   ; z_min = 0.0d0 ; z_max = 2.0d0 * pi ! Simetría Azimutal
 
     final_time = 0.0d0
-    CFL = 0.4d0            
-    save_interval = 1.0d0   
-    
+    CFL = 0.4d0
+    save_interval = 1.0d0
+
     output_prefix = 'FM_Sag'
     output_folder = 'FishboneMoncrief_Sagital'
   end subroutine setup_fishbone_moncrief_sagital
@@ -807,17 +803,17 @@ contains
     fm_inner_radius = 6.0d0
     fm_pressure_max_radius = 12.0d0
     fm_polytropic_constant = 0.015d0
-    
+
     nx = 100 ; r_min = 1.0d0 ; r_max = 121.0d0
     ny = 100 ; y_min = 0.0d0 ; y_max = pi
     nz = 100 ; z_min = 0.0d0 ; z_max = 2.0d0 * pi
 
     final_time = 35.0d0
-    CFL = 0.4d0            
-    save_interval = 1.0d0   
-    
+    CFL = 0.4d0
+    save_interval = 1.0d0
+
     output_prefix = 'FM_3D'
     output_folder = 'FishboneMoncrief_3D'
   end subroutine setup_fishbone_moncrief
-  
+
 end module initialization

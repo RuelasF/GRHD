@@ -2,9 +2,9 @@
 ! Módulo: equations (Física y Transformaciones de Estado GRHD)
 ! ---------------------------------------------------------------------------------------
 ! Este módulo es el corazón hidrodinámico del código. En GRHD, a diferencia de la física
-! Newtoniana, las variables primitivas (rho, p, v) y conservativas (D, S, tau) están 
+! Newtoniana, las variables primitivas (rho, p, v) y conservativas (D, S, tau) están
 ! acopladas de forma altamente no lineal por el factor de Lorentz (W) y la entalpía (h).
-! Este módulo gestiona estas conversiones, calcula los flujos a través de las interfaces 
+! Este módulo gestiona estas conversiones, calcula los flujos a través de las interfaces
 ! numéricas y evalúa los términos fuente debidos a la geometría y curvatura espacial.
 ! =======================================================================================
 module equations
@@ -19,20 +19,21 @@ contains
   ! ===================================================================================
   ! TRANSFORMACIONES DIRECTAS (Primitivas -> Conservativas)
   ! ===================================================================================
-  
+
   ! Subrutina: prim_to_cons
   ! Propósito: Mapeo directo P -> U. Es puramente algebraico (sin iteraciones).
   ! Fórmulas analíticas (Densidades Tensoriales conservadas):
   ! D   = rho * W * sqrt(gamma)
   ! S_i = rho * h * W^2 * v_i * sqrt(gamma)
   ! tau = (rho * h * W^2 - p - rho * W) * sqrt(gamma)
-  
+
   subroutine prim_to_cons(prim_state, cons_state, i, j, k)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:)
     integer, intent(in) :: i, j, k
     real*8, intent(out) :: cons_state(:)
-    
+
     real*8 :: v_sq, h, W
     real*8 :: v(3), v_cov(3)
     real*8 :: g(3,3), sqg
@@ -53,7 +54,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     ! --- ESCUDO DE CAUSALIDAD NUMÉRICA ---
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
@@ -77,7 +78,7 @@ contains
     ! Cálculo de variables conservativas
     cons_state(eq_de) = prim_state(eq_de) * W
     cons_state(eq_pr) = prim_state(eq_de) * h * W**2 - prim_state(eq_pr) - prim_state(eq_de) * W
-    
+
     ! Momentos espaciales covariantes S_i = rho * h * W^2 * v_i
     cons_state(eq_vx) = prim_state(eq_de) * h * W**2 * v_cov(1)
     cons_state(eq_vy) = prim_state(eq_de) * h * W**2 * v_cov(2)
@@ -92,11 +93,12 @@ contains
   ! TRANSFORMACIONES INVERSAS (Conservativas -> Primitivas)
   ! ===================================================================================
   subroutine cons_to_prim(cons_state, prim_state, i, j, k)
+    !$acc routine seq
     implicit none
     real*8, intent(inout) :: cons_state(:)
     integer, intent(in)   :: i, j, k
     real*8, intent(out)   :: prim_state(:)
-    
+
     real*8 :: W, V, dV, v_sq_final
     real*8 :: E_tot, S_sq, S_sq_max, scale_factor
     real*8 :: local_D_floor, local_tau_floor
@@ -134,7 +136,7 @@ contains
          + S_cov(3) * (ginv(3,1)*S_cov(1) + ginv(3,2)*S_cov(2) + ginv(3,3)*S_cov(3))
 
     ! --- ESCUDO DE CAUSALIDAD (LIMÍTE DEL CONO DE LUZ) ---
-    E_tot = cons_state(eq_pr) + cons_state(eq_de) 
+    E_tot = cons_state(eq_pr) + cons_state(eq_de)
     S_sq_max = max(0.0d0, E_tot**2 - cons_state(eq_de)**2) * v_max
 
     if (S_sq > S_sq_max .and. S_sq > 1.0d-20) then
@@ -153,13 +155,13 @@ contains
       prim_state(eq_de) = rho_floor
       prim_state(eq_pr) = p_floor
       prim_state(eq_vx:eq_vz) = 0.0d0
-      
+
       cons_state(eq_de) = local_D_floor
       cons_state(eq_pr) = local_tau_floor
       cons_state(eq_vx:eq_vz) = 0.0d0
       return
     end if
-    
+
     ! --- EXTRACCIÓN EXITOSA ---
     call eval_V_and_dV(W, cons_state, V, dV)
 
@@ -175,7 +177,7 @@ contains
 
     prim_state(eq_de) = cons_state(eq_de) / (W * sqg)
     prim_state(eq_pr) = (V - cons_state(eq_pr) - cons_state(eq_de)) / sqg
-    
+
     ! EXTRACCIÓN DE VELOCIDAD CONTRAVARIANTE (Sana y libre de desincronización)
     ! v^i = (gamma^ij * S_j) / V. Utilizamos siempre el cons_state final.
     prim_state(eq_vx) = (ginv(1,1)*cons_state(eq_vx) + ginv(1,2)*cons_state(eq_vy) + ginv(1,3)*cons_state(eq_vz)) / V
@@ -197,7 +199,7 @@ contains
       prim_state(eq_de) = rho_floor
       prim_state(eq_pr) = p_floor
       prim_state(eq_vx:eq_vz) = 0.0d0
-      
+
       cons_state(eq_de) = local_D_floor
       cons_state(eq_pr) = local_tau_floor
       cons_state(eq_vx:eq_vz) = 0.0d0
@@ -210,6 +212,7 @@ contains
 
   ! Función auxiliar V(W) y su derivada dV/dW para Newton-Raphson.
   subroutine eval_V_and_dV(W, cons_state, V, dV)
+    !$acc routine seq
     real*8, intent(in)  :: W, cons_state(:)
     real*8, intent(out) :: V, dV
     real*8 :: denom
@@ -221,6 +224,7 @@ contains
 
   ! Define la función residual fn(W) que debe ser 0, y su jacobiano dfn/dW.
   subroutine eval_residual(W, cons_state, i, j, k, residual, d_residual)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: W, cons_state(:)
     integer, intent(in) :: i, j, k
@@ -247,6 +251,7 @@ contains
 
   ! Solucionador híbrido Newton-Raphson + Bisección
   function root_safe_newton(cons_state, i, j, k, x1_in, x2_in) result(root)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: cons_state(:)
     integer, intent(in) :: i, j, k
@@ -257,32 +262,32 @@ contains
     integer :: iter_j, ii, jj
     real*8 :: df, diff_x, diff_x_old, f, f_high, f_low, temp, x_high, x_low
     logical :: converged
-    
+
     ! Variables para la cota dinámica superior
     real*8 :: S_sq_local, W_max_guess, ginv_local(3,3)
 
     if (present(x1_in)) then ; x1 = x1_in ; else ; x1 = 1.0d0 ; end if
-    
-    if (present(x2_in)) then 
-      x2 = x2_in 
-    else 
+
+    if (present(x2_in)) then
+      x2 = x2_in
+    else
       ! --- COTA SUPERIOR DINÁMICA DE W ---
       ginv_local(:,:) = gamma_inv_c(:,:,i,j,k)
-      
+
       S_sq_local = 0.0d0
       do ii = 1, 3
         do jj = 1, 3
           S_sq_local = S_sq_local + ginv_local(ii,jj) * cons_state(eq_vx + ii - 1) * cons_state(eq_vx + jj - 1)
         end do
       end do
-      
+
       W_max_guess = (sqrt(S_sq_local) + cons_state(eq_de)) / max(cons_state(eq_de), rho_floor)
       x2 = max(1.0d3, W_max_guess * 2.0d0) ! Límite dinámico blindado
     end if
-    
+
     x_low = x1; x_high = x2
     converged = .false.
-    
+
     call eval_residual(x1, cons_state, i, j, k, f_low, df)
     call eval_residual(x2, cons_state, i, j, k, f_high, df)
 
@@ -293,25 +298,25 @@ contains
     else if (sign(1.0d0, f_low) * sign(1.0d0, f_high) > 0.0d0) then
       root = -1.0d0 ; return
     end if
-    
+
     if (f_low < 0.0d0) then
       x_low = x1 ; x_high = x2
     else
       x_high = x1 ; x_low = x2
     end if
-    
+
     root = 0.5d0 * (x1 + x2)
     diff_x_old = abs(x2 - x1)
     diff_x = diff_x_old
     call eval_residual(root, cons_state, i, j, k, f, df)
-    
+
     do iter_j = 1, MAX_ITER
       if (((root - x_high)*df - f)*((root - x_low)*df - f) > 0.0d0 .or. &
           abs(2.0d0*f) > abs(diff_x_old*df)) then
         diff_x_old = diff_x
         diff_x = 0.5d0 * (x_high - x_low)
         root = x_low + diff_x
-        if (abs(x_low - root) < 1.0d-14) return 
+        if (abs(x_low - root) < 1.0d-14) return
       else
         diff_x_old = diff_x
         diff_x = f / df
@@ -319,14 +324,14 @@ contains
         root = root - diff_x
         if (abs(temp - root) < 1.0d-14) return
       end if
-      
+
       if (abs(diff_x) < x_acc) then
         converged = .true.
         return
-      end if 
-      
+      end if
+
       call eval_residual(root, cons_state, i, j, k, f, df)
-      
+
       if (f < 0.0d0) then
         x_low = root
       else
@@ -341,6 +346,7 @@ contains
 
   ! Método de Brent
   function root_brent(cons_state, i, j, k) result(root)
+    !$acc routine seq
     implicit none
     real*8, intent(in) :: cons_state(:)
     integer, intent(in) :: i, j, k
@@ -350,20 +356,20 @@ contains
     real*8, parameter :: EPS = 3.0d-8
     integer :: iter, ii, jj
     real*8 :: a, b, c, d = 0.0d0, e = 0.0d0, fa, fb, fc, o, q, r, y1, tol1, xm, df
-    
+
     ! Variables para la cota dinámica superior
     real*8 :: S_sq_local, W_max_guess, ginv_local(3,3)
 
     ! --- COTA SUPERIOR DINÁMICA DE W ---
     ginv_local(:,:) = gamma_inv_c(:,:,i,j,k)
-    
+
     S_sq_local = 0.0d0
     do ii = 1, 3
       do jj = 1, 3
         S_sq_local = S_sq_local + ginv_local(ii,jj) * cons_state(eq_vx + ii - 1) * cons_state(eq_vx + jj - 1)
       end do
     end do
-    
+
     W_max_guess = (sqrt(S_sq_local) + cons_state(eq_de)) / max(cons_state(eq_de), rho_floor)
     x2 = max(1.0d4, W_max_guess * 2.0d0) ! Límite dinámico blindado para Brent
 
@@ -430,14 +436,15 @@ contains
   ! Subrutina: calc_fluxes
   ! Propósito: Calcula los Flujos Numéricos F(U) a través de las interfaces de celda.
   ! Cuantifica cuánta masa, momento y energía cruza dinámicamente la pared.
-  
+
   subroutine calc_fluxes(prim_state, f_out, scan_dir, alpha, beta, g, sqg)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:)
     integer, intent(in) :: scan_dir
     real*8, intent(in)  :: alpha, beta(3), g(3,3), sqg
     real*8, intent(out) :: f_out(:)
-    
+
     real*8 :: v_sq, h, W, v_eff
     real*8 :: v_norm, beta_norm
     real*8 :: v(3), v_cov(3)
@@ -454,7 +461,7 @@ contains
         v_sq = v_sq + g(ii,jj) * v(ii) * v(jj)
       end do
     end do
-    
+
     ! --- ESCUDO DE CAUSALIDAD NUMÉRICA ---
     if (v_sq >= v_max) then
       v(1) = v(1) * sqrt(v_max / v_sq)
@@ -482,13 +489,13 @@ contains
 
     h = 1.0d0 + g1 * prim_state(eq_pr) / prim_state(eq_de)
     W = 1.0d0 / sqrt(1.0d0 - v_sq)
-    
+
     ! --- VELOCIDAD DE ADVECCIÓN EFECTIVA ---
     v_eff = alpha * v_norm - beta_norm
 
     ! Ecuación de Continuidad: F(D)
     f_out(eq_de) = prim_state(eq_de) * W * v_eff
-    
+
     ! Ecuación de Energía: F(tau)
     f_out(eq_pr) = prim_state(eq_de) * h * W**2 * v_eff + prim_state(eq_pr) * beta_norm - f_out(eq_de)
 
@@ -503,22 +510,23 @@ contains
 
 
   ! Subrutina: calc_sources
-  ! Propósito: Calcula los Términos Fuente S(U). Aportan los cambios en el momento y 
+  ! Propósito: Calcula los Términos Fuente S(U). Aportan los cambios en el momento y
   ! energía causados exclusivamente por la geometría del espacio curvo (Gravedad).
 
   subroutine calc_sources(prim_state, src_out, i, j, k)
+    !$acc routine seq
     implicit none
     real*8, intent(in)  :: prim_state(:)
     integer, intent(in) :: i, j, k
     real*8, intent(out) :: src_out(:)
-    
+
     real*8 :: T_mn(0:3,0:3), chris(0:3,0:3,0:3), dg(0:3,0:3,1:3)
     real*8 :: alpha, sqg, dlna(0:3)
     integer :: mu, nu, dir_idx
 
     src_out(:) = 0.0d0
 
-    if (trim(metric_type) == 'Minkowski' .and. trim(geom_type) == 'Cartesian') return
+    if (flat_cartesian_sources) return
 
     ! 1. LEER TODO DE LA CACHÉ GLOBAL (Gravedad a coste computacional CERO)
     alpha      = alpha_c(i,j,k)

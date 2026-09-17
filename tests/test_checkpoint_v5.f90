@@ -1,4 +1,4 @@
-program test_checkpoint_v4
+program test_checkpoint_v5
   use variables
   use output
   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -7,9 +7,9 @@ program test_checkpoint_v4
   integer :: failures, unit_file, step_read, i, j, k, component
   real*8 :: time_read
   real*8, allocatable :: expected_state(:,:,:,:)
-  character(len=*), parameter :: test_directory = '/tmp/grhd_checkpoint_v4_test'
+  character(len=*), parameter :: test_directory = '/tmp/grhd_checkpoint_v5_test'
   character(len=*), parameter :: checkpoint_file = &
-    '/tmp/grhd_checkpoint_v4_test/checkpoint_checkpoint_test_step_000000073.rst'
+    '/tmp/grhd_checkpoint_v5_test/checkpoint_checkpoint_test_step_000000073.rst'
 
   failures = 0
   call execute_command_line('mkdir -p '//test_directory)
@@ -18,12 +18,12 @@ program test_checkpoint_v4
   nx = 2
   ny = 1
   nz = 2
-  allocate(up(neq,nx,ny,nz), expected_state(neq,nx,ny,nz))
+  allocate(up(nx,ny,nz,neq), expected_state(nx,ny,nz,neq))
   do k = 1, nz
     do j = 1, ny
       do i = 1, nx
         do component = 1, neq
-          up(component,i,j,k) = dble(1000*component + 100*i + 10*j + k)
+          up(i,j,k,component) = dble(1000*component + 100*i + 10*j + k)
         end do
       end do
     end do
@@ -136,10 +136,10 @@ program test_checkpoint_v4
   deallocate(up,expected_state)
 
   if (failures /= 0) then
-    write(*,'(A,I0)') 'CHECKPOINT V4 TESTS FAILED: ', failures
+    write(*,'(A,I0)') 'CHECKPOINT V5 TESTS FAILED: ', failures
     error stop 1
   end if
-  write(*,'(A)') 'CHECKPOINT V4 TESTS PASSED'
+  write(*,'(A)') 'CHECKPOINT V5 TESTS PASSED'
 
 contains
 
@@ -167,4 +167,4 @@ contains
     end if
   end subroutine assert_integer
 
-end program test_checkpoint_v4
+end program test_checkpoint_v5

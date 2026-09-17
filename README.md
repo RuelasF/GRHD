@@ -34,6 +34,36 @@ make -j
 
 El ejecutable resultante es `grhd2`. Las banderas de producción actuales son `-O3`, OpenMP, optimización específica de la máquina y LTO. Para una auditoría de memoria o punto flotante conviene reemplazar temporalmente `FFLAGS` por las banderas de depuración comentadas en el `Makefile`.
 
+### 2.1 OpenACC en NVIDIA P100
+
+La rama `openacc-p100-soa` incluye un backend separado para GPU. Requiere NVIDIA HPC SDK y `nvfortran`; no utiliza OpenMP durante la evolución GPU. El estado hidrodinámico usa el orden `[x,y,z,variable]`, permanece residente en el dispositivo entre etapas RK y todos los estados, flujos, fuentes y conversiones usan `real*8` (FP64). No se habilitan `fastmath`, TF32, FP32 ni precisiones mixtas.
+
+Para Tesla P100 (Pascal GP100, capacidad de cómputo 6.0):
+
+```bash
+make openacc-p100
+./grhd2 --check ejemplo.par
+CUDA_VISIBLE_DEVICES=0 ./grhd2 ejemplo.par
+```
+
+Para una prueba funcional en una RTX 4070 de Zotz (Ada, capacidad 8.9):
+
+```bash
+make openacc-rtx4070
+CUDA_VISIBLE_DEVICES=0 ./grhd2 ejemplo.par
+```
+
+La RTX 4070 admite instrucciones FP64 y permite comprobar que los kernels funcionan, pero su hardware está orientado a FP32/IA y no representa el rendimiento FP64 de una P100. Una GTX 1050 Ti también ejecuta CUDA y FP64, pero su capacidad de cómputo es 6.1 y su rendimiento de doble precisión es demasiado bajo para usarla como referencia de desempeño. La validación final del target `openacc-p100` debe hacerse sobre una P100 con una versión de NVIDIA HPC SDK que aún genere código `cc60`.
+
+Para confirmar qué GPU tomó el proceso y observar memoria/ocupación:
+
+```bash
+nvidia-smi -L
+watch -n 1 nvidia-smi
+```
+
+`OMP_NUM_THREADS` no controla esta ruta. Las transferencias dispositivo--host se reservan para VTK, checkpoints, diagnósticos y la perturbación diferida; reducir su frecuencia disminuye el tráfico PCIe.
+
 Para eliminar objetos, módulos, ejecutable y binarios de prueba:
 
 ```bash
@@ -250,7 +280,7 @@ Los parámetros de una condición inicial distinta a `problem` son rechazados; e
 
 ## 5. Reinicio desde checkpoint
 
-Los checkpoints actuales usan el identificador `GRHDCP_V4` y contienen malla, física, métodos, parámetros específicos de la condición inicial, estado conservado, tiempo, paso y estado de la perturbación. Los parámetros específicos permiten reconstruir exactamente las fronteras de Jet, Michel y Dust después de un reinicio.
+Los checkpoints actuales usan el identificador `GRHDCP_V5` y contienen malla, física, métodos, parámetros específicos de la condición inicial, estado conservado, tiempo, paso y estado de la perturbación. V5 registra el estado con el orden `[x,y,z,variable]`; el lector conserva compatibilidad con V2--V4 y transpone automáticamente sus estados `[variable,x,y,z]`. Los parámetros específicos permiten reconstruir exactamente las fronteras de Jet, Michel y Dust después de un reinicio.
 
 Ejemplo mínimo:
 
@@ -388,7 +418,9 @@ Cobertura actual:
 - `test-cfl`: condición CFL aditiva en 1D, 2D y 3D con *shift*;
 - `test-minkowski-spherical`: forma analítica, equivalencia con EF para `bh_mass = 0` y curvatura nula en coordenadas radial física y logarítmica;
 - `test-cases`: métrica cilíndrica `(rho,phi,z)`, perturbación transversal de Kelvin--Helmholtz, radio físico de OffAxis en malla logarítmica, solución/fronteras de acreción fría y salida radial compatible con *shift*.
-- `test-checkpoint`: escritura/lectura V4, conservación del estado y de los parámetros específicos necesarios para reproducir datos iniciales y fronteras.
+- `test-checkpoint`: escritura/lectura V5, conservación del estado y de los parámetros específicos necesarios para reproducir datos iniciales y fronteras.
+- `test-acc-reconstruction`: equivalencia de la reconstrucción por caras OpenACC con la ruta de tiras CPU para los cinco métodos, con y sin sensor.
+- `test-acc-rhs`: equivalencia del RHS CPU/OpenACC para los cinco reconstructores, HLLE/HLLC y geometría plana/curva.
 - `test-output`: construcción segura de nombres VTK largos dentro de los límites públicos de configuración.
 
 Estas pruebas no sustituyen campañas de convergencia ni validación física. Antes de publicar resultados deben registrarse compilador, banderas, commit, archivo `.par`, número de hilos y salida completa de las pruebas.

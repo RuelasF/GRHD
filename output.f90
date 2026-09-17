@@ -3,11 +3,11 @@
 ! ---------------------------------------------------------------------------------------
 ! Propósito: Gestiona toda la salida de datos del simulador hacia el disco duro.
 ! Características Clave:
-! 1. Exportación VTK Binario: Máxima velocidad de escritura (I/O) minimizando el 
+! 1. Exportación VTK Binario: Máxima velocidad de escritura (I/O) minimizando el
 !    cuello de botella del disco duro. Genera archivos compatibles con VisIt y ParaView.
-! 2. Tolerancia a Fallos: Sistema de Checkpoints que guarda un volcado binario exacto 
+! 2. Tolerancia a Fallos: Sistema de Checkpoints que guarda un volcado binario exacto
 !    de la memoria RAM para pausar y reanudar simulaciones de semanas de duración.
-! 3. Física Multimensajero: Extracción al vuelo de la señal de Ondas Gravitacionales 
+! 3. Física Multimensajero: Extracción al vuelo de la señal de Ondas Gravitacionales
 !    (polarizaciones h+ y hx) y la tasa de acreción de masa al agujero negro.
 ! =======================================================================================
 module output
@@ -28,6 +28,7 @@ module output
   real*8, parameter :: gw_observer_distance = 1000.0d0
   logical, parameter :: gw_exclude_inside_horizon = .true.
   logical, parameter :: gw_subtract_numerical_atmosphere = .true.
+  logical :: checkpoint_uses_soa_layout = .false.
 
 contains
 
@@ -204,7 +205,7 @@ contains
 
     write(unit_file) '# vtk DataFile Version 3.0' // char(10)
     write(unit_file) 'GRHD Simulation Data' // char(10)
-    write(unit_file) 'BINARY' // char(10)   
+    write(unit_file) 'BINARY' // char(10)
     write(unit_file) 'DATASET STRUCTURED_GRID' // char(10)
 
     write(header_line, '(a, i0, 1x, i0, 1x, i0)') &
@@ -215,7 +216,7 @@ contains
     write(unit_file) trim(header_line) // char(10)
 
     allocate(pts_buffer(3, 1:nx_points, 1:ny_points, 1:nz_points))
-    
+
     ! -------------------------------------------------------------
     ! BUCLE DE MAPEO GEOMÉTRICO 3D (X, Y, Z)
     ! -------------------------------------------------------------
@@ -259,9 +260,9 @@ contains
         end do
       end do
     end do
-    
+
     write(unit_file) pts_buffer
-    write(unit_file) char(10) 
+    write(unit_file) char(10)
     deallocate(pts_buffer)
 
     call write_vtk_cell_data(unit_file)
@@ -413,7 +414,7 @@ contains
       do k = 1, nz
         do j = 1, ny
           do i = 1, nx
-            var_buffer(i, j, k) = p(eq, i, j, k)
+            var_buffer(i, j, k) = p(i,j,k,eq)
             if (use_log_r .and. eq == eq_vx) then
               var_buffer(i, j, k) = var_buffer(i, j, k) * exp(x(i))
             end if
@@ -471,13 +472,13 @@ contains
   ! ===================================================================================
   ! 2. SISTEMA DE CHECKPOINTS (Gestión de memoria binaria directa)
   ! ===================================================================================
-  
+
   subroutine save_checkpoint(step_num, current_time)
     integer, intent(in) :: step_num
     real*8, intent(in) :: current_time
     integer :: unit_file, io_status
     character(len=512) :: file_name
-    character(len=12), parameter :: checkpoint_magic = 'GRHDCP_V4'
+    character(len=12), parameter :: checkpoint_magic = 'GRHDCP_V5'
 
     write(file_name, '(A, "/checkpoint_", A, "_step_", I9.9, ".rst")') &
       trim(output_folder), trim(scheme_name), step_num
@@ -488,26 +489,27 @@ contains
     if (io_status == 0) then
       write(unit_file) checkpoint_magic
       ! Topología de malla 3D y profundidad de fantasmas
-      write(unit_file) nghost, nx, ny, nz 
-      
+      write(unit_file) nghost, nx, ny, nz
+
       ! Fronteras lógicas (Actualizado a r_min/r_max)
       write(unit_file) r_min, r_max, y_min, y_max, z_min, z_max
-      
+
       ! Física y Banderas Arquitectónicas (Actualizado con banderas de extracción)
       write(unit_file) bh_mass, adb_idx, a_spin
       write(unit_file) use_log_r, use_shock_sensor, do_gw_extraction, &
                        do_mdot_extraction, do_ppi_diagnostics
       write(unit_file) metric_type, geom_type
-      
+
       ! Control de tiempo y salida
       write(unit_file) final_time, CFL, save_interval
       write(unit_file) output_prefix, output_folder
-      
+
       ! Identificadores de esquemas
       write(unit_file) case_id, case_name, scheme_name
       write(unit_file) rec_method_id, tvd_limiter_id, riemann_solver_id
 
-      ! V4 conserva los parámetros específicos que definen datos iniciales y
+      ! V5 conserva los parámetros específicos de V4 y registra mediante su
+      ! versión que el estado se almacena como [x,y,z,variable].
       ! fronteras. Son necesarios para reinicios reproducibles de Jet, Michel
       ! y Dust, y para documentar exactamente cualquier otro caso.
       call write_checkpoint_initial_parameters(unit_file)
@@ -516,13 +518,13 @@ contains
       write(unit_file) apply_perturbation, perturbation_applied
       write(unit_file) perturbation_type, perturbation_seed, diagnostic_stride
       write(unit_file) perturbation_time, perturbation_amplitude, perturbation_mode
-      
+
       ! Estado temporal de la simulación
       write(unit_file) current_time
       write(unit_file) step_num
-      
+
       ! Vuelco binario masivo del arreglo de estado conservado 4D
-      write(unit_file) up 
+      write(unit_file) up
       close(unit_file)
     else
       print *, 'CRITICAL ERROR: Fallo al crear el archivo de checkpoint.'
@@ -532,25 +534,28 @@ contains
   subroutine read_checkpoint_metadata(unit_file)
     integer, intent(in) :: unit_file
     integer :: io_status
-    logical :: is_v2, is_v3, is_v4, is_versioned
+    logical :: is_v2, is_v3, is_v4, is_v5, is_versioned
     character(len=12) :: checkpoint_magic
     character(len=12), parameter :: checkpoint_magic_v2 = 'GRHDCP_V2'
     character(len=12), parameter :: checkpoint_magic_v3 = 'GRHDCP_V3'
     character(len=12), parameter :: checkpoint_magic_v4 = 'GRHDCP_V4'
+    character(len=12), parameter :: checkpoint_magic_v5 = 'GRHDCP_V5'
 
     read(unit_file, iostat=io_status) checkpoint_magic
     is_v2 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v2)
     is_v3 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v3)
     is_v4 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v4)
-    is_versioned = is_v2 .or. is_v3 .or. is_v4
+    is_v5 = (io_status == 0 .and. checkpoint_magic == checkpoint_magic_v5)
+    is_versioned = is_v2 .or. is_v3 .or. is_v4 .or. is_v5
+    checkpoint_uses_soa_layout = is_v5
     if (.not. is_versioned) rewind(unit_file)
 
     ! Topología de malla
     read(unit_file) nghost, nx, ny, nz
-    
+
     ! Fronteras lógicas
     read(unit_file) r_min, r_max, y_min, y_max, z_min, z_max
-    
+
     ! Física y Banderas Arquitectónicas (Actualizado con banderas de extracción)
     if (is_versioned) then
       read(unit_file) bh_mass, adb_idx, a_spin
@@ -559,7 +564,7 @@ contains
       a_spin = 0.0d0
       print *, 'WARNING: legacy checkpoint has no Kerr spin; assuming a = 0.'
     end if
-    if (is_v3 .or. is_v4) then
+    if (is_v3 .or. is_v4 .or. is_v5) then
       read(unit_file) use_log_r, use_shock_sensor, do_gw_extraction, &
                       do_mdot_extraction, do_ppi_diagnostics
     else
@@ -567,22 +572,22 @@ contains
       do_ppi_diagnostics = .false.
     end if
     read(unit_file) metric_type, geom_type
-    
+
     ! Control
     read(unit_file) final_time, CFL, save_interval
     read(unit_file) output_prefix, output_folder
-    
+
     ! Eschemas
     read(unit_file) case_id, case_name, scheme_name
     read(unit_file) rec_method_id, tvd_limiter_id, riemann_solver_id
 
-    if (is_v4) then
+    if (is_v4 .or. is_v5) then
       call read_checkpoint_initial_parameters(unit_file)
     else if (case_id == 5 .or. case_id == 7 .or. case_id == 8) then
       write(*,'(A)') 'WARNING: legacy checkpoint lacks case-specific boundary parameters; using defaults.'
     end if
 
-    if (is_v3 .or. is_v4) then
+    if (is_v3 .or. is_v4 .or. is_v5) then
       read(unit_file) apply_perturbation, perturbation_applied
       read(unit_file) perturbation_type, perturbation_seed, diagnostic_stride
       read(unit_file) perturbation_time, perturbation_amplitude, perturbation_mode
@@ -595,13 +600,30 @@ contains
     integer, intent(in) :: unit_file
     integer, intent(out) :: step_num
     real*8, intent(out) :: current_time
+    real*8, allocatable :: legacy_up(:,:,:,:)
+    integer :: component, i, j, k
 
     read(unit_file) current_time
     read(unit_file) step_num
-    
-    ! El programa principal debe asegurar que 'up' ya esté alojado en memoria 
+
+    ! El programa principal debe asegurar que 'up' ya esté alojado en memoria
     ! dinámicamente con nx, ny, nz leídos en la metadata antes de llegar aquí.
-    read(unit_file) up
+    if (checkpoint_uses_soa_layout) then
+      read(unit_file) up
+    else
+      allocate(legacy_up(neq,nx,ny,nz))
+      read(unit_file) legacy_up
+      do component = 1, neq
+        do k = 1, nz
+          do j = 1, ny
+            do i = 1, nx
+              up(i,j,k,component) = legacy_up(component,i,j,k)
+            end do
+          end do
+        end do
+      end do
+      deallocate(legacy_up)
+    end if
   end subroutine read_checkpoint_state
 
   subroutine write_checkpoint_initial_parameters(unit_file)
@@ -896,8 +918,8 @@ contains
           th = y(j)
           phi = z(k)
 
-          rho = p(eq_de, i, j, k)
-          pres = p(eq_pr, i, j, k)
+          rho = p(i,j,k,eq_de)
+          pres = p(i,j,k,eq_pr)
           if (gw_subtract_numerical_atmosphere) then
             rho = max(0.0d0, rho - rho_floor)
             pres = max(0.0d0, pres - p_floor)
@@ -906,7 +928,7 @@ contains
 
           alpha = alpha_c(i,j,k)
           beta = beta_c(:,i,j,k)
-          eulerian_velocity = p(eq_vx:eq_vz, i, j, k)
+          eulerian_velocity = p(i,j,k,eq_vx:eq_vz)
           call gw_cartesian_kinematics(r, th, phi, geometry_spin, alpha, beta, &
                                        eulerian_velocity, use_log_r, position, &
                                        cartesian_velocity, flat_jacobian)
@@ -972,15 +994,15 @@ contains
         alpha = alpha_c(idx_probe, j, k)
         beta(:) = beta_c(:, idx_probe, j, k)
 
-        v_eff = alpha * p(eq_vx, idx_probe, j, k) - beta(1)
-        
+        v_eff = alpha * p(idx_probe,j,k,eq_vx) - beta(1)
+
         ! 'up' contiene el estado conservado densificado. up(eq_de) es D = rho * W * sqrt(gamma)
-        m_dot = m_dot + up(eq_de, idx_probe, j, k) * v_eff * dy * dz
+        m_dot = m_dot + up(idx_probe,j,k,eq_de) * v_eff * dy * dz
       end do
     end do
     !$OMP END PARALLEL DO
-    
-    m_dot = - m_dot 
+
+    m_dot = - m_dot
 
     block
       character(len=512) :: m_dot_filename
@@ -1015,8 +1037,8 @@ contains
       azimuthal_mass = 0.0d0
       do j = 1, ny
         do i = 1, nx
-          if (p(eq_de, i, j, k) > density_cut) then
-            azimuthal_mass = azimuthal_mass + up(eq_de, i, j, k) * cell_volume
+          if (p(i,j,k,eq_de) > density_cut) then
+            azimuthal_mass = azimuthal_mass + up(i,j,k,eq_de) * cell_volume
           end if
         end do
       end do
@@ -1078,13 +1100,13 @@ contains
     do k = 1, nz
       do j = 1, ny
         do i = 1, nx
-          rho = p(eq_de, i, j, k)
-          pres = p(eq_pr, i, j, k)
+          rho = p(i,j,k,eq_de)
+          pres = p(i,j,k,eq_pr)
           v_sq = 0.0d0
           do ii = 1, 3
             do jj = 1, 3
               v_sq = v_sq + gamma_c(ii, jj, i, j, k) * &
-                     p(eq_vx + ii - 1, i, j, k) * p(eq_vx + jj - 1, i, j, k)
+                     p(i,j,k,eq_vx + ii - 1) * p(i,j,k,eq_vx + jj - 1)
             end do
           end do
 
@@ -1104,10 +1126,10 @@ contains
           end if
           if (ieee_is_finite(v_sq)) max_velocity_squared = max(max_velocity_squared, v_sq)
 
-          mass_total = mass_total + up(eq_de, i, j, k) * cell_volume
-          angular_momentum = angular_momentum + up(eq_vz, i, j, k) * cell_volume
+          mass_total = mass_total + up(i,j,k,eq_de) * cell_volume
+          angular_momentum = angular_momentum + up(i,j,k,eq_vz) * cell_volume
           if (rho > density_cut) then
-            disk_mass = disk_mass + up(eq_de, i, j, k) * cell_volume
+            disk_mass = disk_mass + up(i,j,k,eq_de) * cell_volume
           else
             atmosphere_cells = atmosphere_cells + 1_8
           end if
@@ -1176,7 +1198,7 @@ contains
         advected_coordinate = x(i) - advected_wave_speed * integration_time
         rho_exact = advected_wave_density + advected_wave_amplitude * sinc_factor * &
                     sin(advected_wave_number * pi * advected_coordinate)
-        diff = abs(p(eq_de, i, j_idx, 1) - rho_exact)
+        diff = abs(p(i,j_idx,1,eq_de) - rho_exact)
         sum_L1 = sum_L1 + diff
         sum_L2 = sum_L2 + diff**2
         if (diff > err_Linf) then
@@ -1188,15 +1210,15 @@ contains
       file_name = trim(output_folder) // '/convergence_' // trim(scheme_name) // '.dat'
     else if (trim(case_name) == 'MichelA') then
       ! Michel conserva la comparación histórica en la región interior segura.
-      allocate(p_conv(neq, 1:nx, 1:ny, 1:nz))
+      allocate(p_conv(1:nx,1:ny,1:nz,neq))
       call setup_michel_accretion_initial(p_conv, michel_critical_radius, &
                                            michel_critical_density)
       i_start = max(1, int(0.10d0 * dble(nx)))
       i_end = min(nx, max(i_start, int(0.95d0 * dble(nx))))
       celdas_validas = dble(i_end - i_start + 1)
       do i = i_start, i_end
-        rho_exact = p_conv(eq_de, i, j_idx, 1)
-        diff = abs(p(eq_de, i, j_idx, 1) - rho_exact)
+        rho_exact = p_conv(i,j_idx,1,eq_de)
+        diff = abs(p(i,j_idx,1,eq_de) - rho_exact)
         sum_L1 = sum_L1 + diff
         sum_L2 = sum_L2 + diff**2
         if (diff > err_Linf) then
@@ -1220,7 +1242,7 @@ contains
       do i = i_start, i_end
         call evaluate_dust_accretion_state(x(i), dust_exact)
         rho_exact = dust_exact(eq_de)
-        diff = abs(p(eq_de, i, j_idx, 1) - rho_exact)
+        diff = abs(p(i,j_idx,1,eq_de) - rho_exact)
         sum_L1 = sum_L1 + diff
         sum_L2 = sum_L2 + diff**2
         if (diff > err_Linf) then

@@ -102,7 +102,7 @@ contains
     ny = 1
     nz = 3
     allocate(x(-nghost:nx+nghost), y(-nghost:ny+nghost), z(-nghost:nz+nghost))
-    allocate(p(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+    allocate(p(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
     x = 0.0d0
     y = 0.0d0
     z = 0.0d0
@@ -125,18 +125,18 @@ contains
     call set_initial_conditions()
 
     expected_transverse_velocity = khi_perturbation_amplitude*exp(-0.5d0)
-    call assert_close('KHI inner base velocity unchanged', p(eq_vx,1,1,1), &
+    call assert_close('KHI inner base velocity unchanged', p(1,1,1,eq_vx), &
       khi_vx_inner, tolerance, failure_count)
-    call assert_close('KHI outer base velocity unchanged', p(eq_vx,1,1,2), &
+    call assert_close('KHI outer base velocity unchanged', p(1,1,2,eq_vx), &
       khi_vx_outer, tolerance, failure_count)
-    call assert_close('KHI perturbation is transverse', p(eq_vz,1,1,1), &
+    call assert_close('KHI perturbation is transverse', p(1,1,1,eq_vz), &
       expected_transverse_velocity, tolerance, failure_count)
-    call assert_close('KHI perturbation peaks at interface', p(eq_vz,1,1,2), &
+    call assert_close('KHI perturbation peaks at interface', p(1,1,2,eq_vz), &
       khi_perturbation_amplitude, tolerance, failure_count)
-    call assert_close('KHI longitudinal node remains exact', p(eq_vz,2,1,2), &
+    call assert_close('KHI longitudinal node remains exact', p(2,1,2,eq_vz), &
       0.0d0, tolerance, failure_count)
     do i = 1, nx
-      call assert_close('KHI unused y velocity', p(eq_vy,i,1,1), 0.0d0, &
+      call assert_close('KHI unused y velocity', p(i,1,1,eq_vy), 0.0d0, &
         tolerance, failure_count)
     end do
 
@@ -154,7 +154,7 @@ contains
     ny = 1
     nz = 1
     allocate(x(-nghost:nx+nghost), y(-nghost:ny+nghost), z(-nghost:nz+nghost))
-    allocate(p(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+    allocate(p(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
     offaxis_radial_center = 15.0d0
     offaxis_phi_center = pi
     offaxis_width = 1.5d0
@@ -170,12 +170,12 @@ contains
     z = offaxis_phi_center
     call set_initial_conditions()
 
-    call assert_close('OffAxis log peak density', p(eq_de,1,1,1), &
+    call assert_close('OffAxis log peak density', p(1,1,1,eq_de), &
       offaxis_background_density + offaxis_density_amplitude, tolerance, failure_count)
-    call assert_close('OffAxis log peak pressure', p(eq_pr,1,1,1), &
+    call assert_close('OffAxis log peak pressure', p(1,1,1,eq_pr), &
       offaxis_background_pressure + offaxis_pressure_amplitude, tolerance, failure_count)
     expected_profile = exp(-1.0d0)
-    call assert_close('OffAxis log physical radial width', p(eq_de,2,1,1), &
+    call assert_close('OffAxis log physical radial width', p(2,1,1,eq_de), &
       offaxis_background_density + offaxis_density_amplitude*expected_profile, &
       tolerance, failure_count)
 
@@ -238,26 +238,26 @@ contains
     ny = 2
     nz = 2
     allocate(x(-nghost:nx+nghost))
-    allocate(q(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+    allocate(q(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
     do i = -nghost, nx+nghost
       x(i) = 2.5d0 + dble(i)
     end do
     q = -huge(1.0d0)
-    q(:,1:nx,1:ny,1:nz) = 0.0d0
-    q(eq_de,1:nx,1:ny,1:nz) = 0.2d0
-    q(eq_pr,1:nx,1:ny,1:nz) = 0.3d0
-    q(eq_vx,1:nx,1:ny,1:nz) = 0.1d0
+    q(1:nx,1:ny,1:nz,:) = 0.0d0
+    q(1:nx,1:ny,1:nz,eq_de) = 0.2d0
+    q(1:nx,1:ny,1:nz,eq_pr) = 0.3d0
+    q(1:nx,1:ny,1:nz,eq_vx) = 0.1d0
     case_name = 'Dust'
     call set_boundary_conditions(q)
-    call assert_close('Dust inner outflow clips outward velocity', q(eq_vx,0,1,1), &
+    call assert_close('Dust inner outflow clips outward velocity', q(0,1,1,eq_vx), &
       0.0d0, tolerance, failure_count)
-    call assert_close('Dust inner density copy', q(eq_de,0,1,1), &
-      q(eq_de,1,1,1), tolerance, failure_count)
+    call assert_close('Dust inner density copy', q(0,1,1,eq_de), &
+      q(1,1,1,eq_de), tolerance, failure_count)
     call evaluate_dust_accretion_state(x(nx+1), expected_outer)
-    call assert_array('Dust analytic outer injection', q(:,nx+1,1,1), &
+    call assert_array('Dust analytic outer injection', q(nx+1,1,1,:), &
       expected_outer, tolerance, failure_count)
-    call assert_array('Dust transverse periodic boundary', q(:,2,0,1), &
-      q(:,2,ny,1), tolerance, failure_count)
+    call assert_array('Dust transverse periodic boundary', q(2,0,1,:), &
+      q(2,ny,1,:), tolerance, failure_count)
 
     deallocate(q, x)
   end subroutine check_dust_solution_and_boundaries
@@ -272,22 +272,22 @@ contains
     nx = 2
     ny = 1
     nz = 1
-    allocate(q(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+    allocate(q(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
     allocate(alpha_c(nx,ny,nz), beta_c(3,nx,ny,nz))
     q = 0.0d0
-    q(eq_de,:,:,:) = 1.0d0
-    q(eq_pr,:,:,:) = 1.0d0
-    q(eq_vx,1,1,1) = 0.40d0
-    q(eq_vx,2,1,1) = 0.00d0
+    q(:,:,:,eq_de) = 1.0d0
+    q(:,:,:,eq_pr) = 1.0d0
+    q(1,1,1,eq_vx) = 0.40d0
+    q(2,1,1,eq_vx) = 0.00d0
     alpha_c = 0.80d0
     beta_c = 0.0d0
     beta_c(1,:,:,:) = 0.20d0
     case_name = 'OffAxis'
 
     call set_boundary_conditions(q)
-    call assert_close('shift-aware inner zero-flux ceiling', q(eq_vx,0,1,1), &
+    call assert_close('shift-aware inner zero-flux ceiling', q(0,1,1,eq_vx), &
       expected_zero_flux_velocity, tolerance, failure_count)
-    call assert_close('shift-aware outer zero-flux floor', q(eq_vx,nx+1,1,1), &
+    call assert_close('shift-aware outer zero-flux floor', q(nx+1,1,1,eq_vx), &
       expected_zero_flux_velocity, tolerance, failure_count)
 
     deallocate(q, alpha_c, beta_c)

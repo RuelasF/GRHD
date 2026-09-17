@@ -27,7 +27,7 @@ program test_output_paths
 
   allocate(x(-nghost:nx+nghost), y(-nghost:ny+nghost), z(-nghost:nz+nghost))
   allocate(x_face(0:nx), y_face(0:ny), z_face(0:nz))
-  allocate(p(neq,-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost))
+  allocate(p(-nghost:nx+nghost,-nghost:ny+nghost,-nghost:nz+nghost,neq))
   allocate(alpha_c(nx,ny,nz), beta_c(3,nx,ny,nz))
   allocate(var_names(neq))
 
@@ -44,8 +44,8 @@ program test_output_paths
   y_face = [0.0d0, 1.0d0]
   z_face = [0.0d0, 1.0d0, 2.0d0]
   p = 0.0d0
-  p(eq_de,:,:,:) = 1.0d0
-  p(eq_pr,:,:,:) = 0.1d0
+  p(:,:,:,eq_de) = 1.0d0
+  p(:,:,:,eq_pr) = 0.1d0
   alpha_c = 1.0d0
   beta_c = 0.0d0
   var_names(eq_de) = 'Density'
