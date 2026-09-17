@@ -23,6 +23,7 @@ FALLBACK_THREADS="${FALLBACK_THREADS:-60}"
 RECONSTRUCTIONS="${RECONSTRUCTIONS:-weno5 mp5}"
 LAUNCHER_NAME="${LAUNCHER_NAME:-$(basename "$SCRIPT_PATH")}"
 CAMPAIGN_LABEL="${CAMPAIGN_LABEL:-PPI MP5/WENO5}"
+CPU_BINDING="${CPU_BINDING:-none}"
 
 if [[ "$CAMPAIGN_ROOT" =~ [[:space:]] ]]; then
   printf 'ERROR: CAMPAIGN_ROOT no puede contener espacios: %s\n' "$CAMPAIGN_ROOT" >&2
@@ -38,7 +39,7 @@ $CAMPAIGN_LABEL: malla 800x1x400, t=5000 M, perturbación en t=1000 M.
   sbatch $LAUNCHER_NAME         Envía a Slurm con nombre inundaciones.
   qsub $LAUNCHER_NAME           Envía a PBS con nombre inundaciones.
 
-Variables opcionales: CAMPAIGN_ROOT y GRHD_EXECUTABLE.
+Variables opcionales: CAMPAIGN_ROOT, GRHD_EXECUTABLE y CPU_BINDING.
 PREFLIGHT_ONLY=1 valida el ejecutable, los hilos y los .par sin correr.
 Al reejecutar sobre la misma CAMPAIGN_ROOT se conserva el binario inicial,
 se omiten casos terminados y los incompletos continúan desde su checkpoint.
@@ -167,6 +168,74 @@ select_thread_budget() {
   printf '%s\n' "$THREADS_PER_CASE" >"$STATE_ROOT/threads_per_case.txt"
   printf '[%s] Presupuesto: %d hilos totales; %d casos simultáneos; %d hilos por caso.\n' \
     "$(timestamp)" "$TOTAL_THREADS" "$CONCURRENT_CASES" "$THREADS_PER_CASE"
+}
+
+declare -a CPU_SETS=()
+
+configure_cpu_affinity() {
+  local cpu core socket online key cpu_set slot index
+  local -a physical_cpus=() sockets=() sorted_sockets=() set_cpus=()
+  local -A seen_cores=() socket_sets=()
+
+  case "$CPU_BINDING" in
+    none)
+      printf '[%s] Afinidad explícita desactivada.\n' "$(timestamp)"
+      return 0
+      ;;
+    physical) ;;
+    *) die "CPU_BINDING debe ser none o physical; recibido: $CPU_BINDING" ;;
+  esac
+
+  command -v lscpu >/dev/null 2>&1 || die 'CPU_BINDING=physical requiere lscpu'
+  command -v taskset >/dev/null 2>&1 || die 'CPU_BINDING=physical requiere taskset'
+
+  while IFS=, read -r cpu core socket online; do
+    [[ "$cpu" =~ ^[0-9]+$ && "$core" =~ ^[0-9]+$ && "$socket" =~ ^[0-9]+$ ]] || continue
+    [[ "$online" == Y || "$online" == yes || "$online" == 1 ]] || continue
+    taskset --cpu-list "$cpu" true >/dev/null 2>&1 || continue
+    key="$socket:$core"
+    [[ -z "${seen_cores[$key]+x}" ]] || continue
+    seen_cores[$key]=1
+    physical_cpus+=("$cpu")
+    if [[ -z "${socket_sets[$socket]+x}" ]]; then
+      sockets+=("$socket")
+      socket_sets[$socket]="$cpu"
+    else
+      socket_sets[$socket]+=",$cpu"
+    fi
+  done < <(lscpu -p=CPU,CORE,SOCKET,ONLINE)
+
+  (( ${#physical_cpus[@]} >= TOTAL_THREADS )) || \
+    die "se solicitaron $TOTAL_THREADS núcleos físicos, pero la afinidad actual permite ${#physical_cpus[@]}"
+
+  # Cuando coincide un proceso por socket, cada caso conserva su caché L3 local.
+  if (( ${#sockets[@]} == CONCURRENT_CASES )); then
+    mapfile -t sorted_sockets < <(printf '%s\n' "${sockets[@]}" | sort -n)
+    for socket in "${sorted_sockets[@]}"; do
+      cpu_set="${socket_sets[$socket]}"
+      IFS=, read -r -a set_cpus <<<"$cpu_set"
+      (( ${#set_cpus[@]} == THREADS_PER_CASE )) || \
+        die "el socket $socket ofrece ${#set_cpus[@]} núcleos físicos; se requieren $THREADS_PER_CASE"
+      CPU_SETS+=("$cpu_set")
+    done
+  else
+    # Respaldo genérico: conjuntos disjuntos de un hilo lógico por núcleo físico.
+    index=0
+    for ((slot=0; slot<CONCURRENT_CASES; slot++)); do
+      cpu_set=""
+      for ((core=0; core<THREADS_PER_CASE; core++)); do
+        [[ -z "$cpu_set" ]] || cpu_set+=,
+        cpu_set+="${physical_cpus[$index]}"
+        index=$((index + 1))
+      done
+      CPU_SETS+=("$cpu_set")
+    done
+  fi
+
+  for ((slot=0; slot<CONCURRENT_CASES; slot++)); do
+    printf '[%s] Afinidad slot %d: CPU %s (%d núcleos físicos).\n' \
+      "$(timestamp)" "$slot" "${CPU_SETS[$slot]}" "$THREADS_PER_CASE"
+  done
 }
 
 declare -a CASES=()
@@ -396,7 +465,7 @@ audit_case() {
 
 run_case() {
   local label="$1" case_root checkpoint session parameter_file relative_parameter
-  local log_file exit_file status=0
+  local slot="${2:-0}" cpu_set='' log_file exit_file status=0
   case_root="$RESULT_ROOT/$label"
   mkdir -p "$case_root"
 
@@ -425,13 +494,27 @@ run_case() {
     return 1
   fi
 
-  printf '[%s] START %s, %s, %d hilos, proceso inundaciones.\n' \
-    "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE"
+  if [[ "$CPU_BINDING" == physical ]]; then
+    cpu_set="${CPU_SETS[$slot]}"
+    printf '[%s] START %s, %s, %d núcleos, CPU %s, proceso inundaciones.\n' \
+      "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE" "$cpu_set"
+  else
+    printf '[%s] START %s, %s, %d hilos, proceso inundaciones.\n' \
+      "$(timestamp)" "$label" "$session" "$THREADS_PER_CASE"
+  fi
   printf '%s\n' "$(timestamp)" >"$LOG_ROOT/${label}_${session}.start"
   set +e
-  (cd "$CAMPAIGN_ROOT" && \
-    OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$THREADS_PER_CASE" OMP_PROC_BIND=FALSE \
-    "$CAMPAIGN_EXECUTABLE" "$relative_parameter") >"$log_file" 2>&1
+  if [[ "$CPU_BINDING" == physical ]]; then
+    (cd "$CAMPAIGN_ROOT" && \
+      OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$THREADS_PER_CASE" \
+      OMP_PLACES=cores OMP_PROC_BIND=CLOSE \
+      taskset --cpu-list "$cpu_set" "$CAMPAIGN_EXECUTABLE" "$relative_parameter") \
+      >"$log_file" 2>&1
+  else
+    (cd "$CAMPAIGN_ROOT" && \
+      OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$THREADS_PER_CASE" OMP_PROC_BIND=FALSE \
+      "$CAMPAIGN_EXECUTABLE" "$relative_parameter") >"$log_file" 2>&1
+  fi
   status=$?
   set -e
   printf '%s\n' "$status" >"$exit_file"
@@ -459,13 +542,14 @@ run_case() {
 }
 
 run_all_cases() {
-  local label pid failures=0
+  local label pid failures=0 slot=0
   local -a active_pids=() active_labels=()
 
   for label in "${CASES[@]}"; do
-    run_case "$label" &
+    run_case "$label" "$slot" &
     active_pids+=("$!")
     active_labels+=("$label")
+    slot=$((slot + 1))
 
     if (( ${#active_pids[@]} == CONCURRENT_CASES )); then
       for pid in "${active_pids[@]}"; do
@@ -473,6 +557,7 @@ run_all_cases() {
       done
       active_pids=()
       active_labels=()
+      slot=0
     fi
   done
 
@@ -504,6 +589,7 @@ printf '[%s] Inicio del controlador inundaciones.\n' "$(timestamp)"
 prepare_executable
 validate_parameter_files
 select_thread_budget
+configure_cpu_affinity
 
 if [[ "$PREFLIGHT_ONLY" == 1 ]]; then
   printf '[%s] PREFLIGHT PASS: ejecutable, hilos y %d archivos .par.\n' \

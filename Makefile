@@ -4,7 +4,8 @@
 
 # Compilador y Banderas de optimización
 FC = gfortran
-FFLAGS = -O3 -fopenmp -march=native -flto=auto -fno-math-errno -fno-trapping-math -ffree-line-length-none
+ARCH_FLAGS ?= -march=native
+FFLAGS = -O3 -fopenmp $(ARCH_FLAGS) -flto=auto -fno-math-errno -fno-trapping-math -ffree-line-length-none
 #FFLAGS = -fopenmp -O0 -g -fbacktrace -Wall -Wextra -fcheck=all -finit-real=snan -ffpe-trap=invalid,zero,overflow,underflow,denormal
 
 # Nombre del ejecutable final
@@ -20,7 +21,12 @@ TEST_CASE_CORRECTIONS_TARGET = tests/test_case_corrections
 TEST_CHECKPOINT_TARGET = tests/test_checkpoint_v4
 TEST_OUTPUT_TARGET = tests/test_output_paths
 
-.PHONY: test test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output clean
+.PHONY: server-broadwell test test-hllc test-gw test-gw-geometry test-gw-stress test-fm test-polar test-cfl test-minkowski-spherical test-cases test-checkpoint test-output clean
+
+# Ejecutable transferible para Intel Xeon E5 v4 (Broadwell-EP).
+server-broadwell:
+	$(MAKE) clean
+	$(MAKE) ARCH_FLAGS='-march=broadwell -mtune=broadwell' $(TARGET)
 
 # Lista de archivos objeto en el orden estricto de dependencias
 OBJS = variables.o \

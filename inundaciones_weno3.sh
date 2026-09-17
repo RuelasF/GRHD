@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=inundaciones
-#SBATCH --cpus-per-task=27
+#SBATCH --cpus-per-task=20
+#SBATCH --hint=nomultithread
 #PBS -N inundaciones
-#PBS -l select=1:ncpus=27
+#PBS -l select=1:ncpus=20
 
 # Perfil WENO3 de la campaña PPI. Reutiliza el controlador general probado.
 
@@ -14,9 +15,10 @@ readonly WRAPPER_PARENT="$(cd "$WRAPPER_DIR/.." && pwd -P)"
 
 export CAMPAIGN_ROOT="${CAMPAIGN_ROOT:-$WRAPPER_PARENT/inundaciones_ppi_weno3_800_t5000}"
 export RECONSTRUCTIONS=weno3
-export PRIMARY_THREADS=27
+export PRIMARY_THREADS=20
 export FALLBACK_THREADS=0
-export CONCURRENT_CASES=3
+export CONCURRENT_CASES=2
+export CPU_BINDING=physical
 export LAUNCHER_NAME=inundaciones_weno3.sh
 export CAMPAIGN_LABEL='PPI WENO3'
 
