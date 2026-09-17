@@ -1,5 +1,5 @@
 # GRHD2
-
+# Intento de transporte a CUDA, NO FUNCIONA TODAVÍA
 Este README funciona como manual de usuario y desarrollo de GRHD2. Describe cómo compilar, configurar, ejecutar, verificar y extender el código contenido en este repositorio; su fuente son las rutinas Fortran y las pruebas versionadas en `tests/`.
 
 > **Estado físico:** GRHD para un fluido perfecto sobre una métrica analítica fija. No es GRMHD, no evoluciona el espacio-tiempo y no incluye autogravedad del fluido. La salida `GW_signal.dat` es un proxy cuadrupolar Finn--Evans de campo débil, no un *strain* observable ni una extracción gauge-invariant.
