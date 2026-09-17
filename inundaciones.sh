@@ -173,9 +173,9 @@ select_thread_budget() {
 declare -a CPU_SETS=()
 
 configure_cpu_affinity() {
-  local cpu core socket online key cpu_set slot index
+  local cpu core socket online key cpu_set slot index allowed_list
   local -a physical_cpus=() sockets=() sorted_sockets=() set_cpus=()
-  local -A seen_cores=() socket_sets=()
+  local -A topology_cores=() seen_cores=() socket_sets=()
 
   case "$CPU_BINDING" in
     none)
@@ -191,9 +191,11 @@ configure_cpu_affinity() {
 
   while IFS=, read -r cpu core socket online; do
     [[ "$cpu" =~ ^[0-9]+$ && "$core" =~ ^[0-9]+$ && "$socket" =~ ^[0-9]+$ ]] || continue
-    [[ "$online" == Y || "$online" == yes || "$online" == 1 ]] || continue
-    taskset --cpu-list "$cpu" true >/dev/null 2>&1 || continue
     key="$socket:$core"
+    topology_cores[$key]=1
+    # taskset descarta tanto CPU fuera del cpuset actual como CPU fuera de línea;
+    # no dependemos del texto localizado de la columna Online de lscpu.
+    taskset -c "$cpu" true >/dev/null 2>&1 || continue
     [[ -z "${seen_cores[$key]+x}" ]] || continue
     seen_cores[$key]=1
     physical_cpus+=("$cpu")
@@ -203,10 +205,12 @@ configure_cpu_affinity() {
     else
       socket_sets[$socket]+=",$cpu"
     fi
-  done < <(lscpu -p=CPU,CORE,SOCKET,ONLINE)
+  done < <(LC_ALL=C lscpu -p=CPU,CORE,SOCKET,ONLINE)
 
-  (( ${#physical_cpus[@]} >= TOTAL_THREADS )) || \
-    die "se solicitaron $TOTAL_THREADS núcleos físicos, pero la afinidad actual permite ${#physical_cpus[@]}"
+  if (( ${#physical_cpus[@]} < TOTAL_THREADS )); then
+    allowed_list="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status 2>/dev/null || true)"
+    die "se solicitaron $TOTAL_THREADS núcleos físicos; lscpu detectó ${#topology_cores[@]}, pero taskset permite ${#physical_cpus[@]} dentro de Cpus_allowed_list=${allowed_list:-desconocida}"
+  fi
 
   # Cuando coincide un proceso por socket, cada caso conserva su caché L3 local.
   if (( ${#sockets[@]} == CONCURRENT_CASES )); then
@@ -508,7 +512,7 @@ run_case() {
     (cd "$CAMPAIGN_ROOT" && \
       OMP_DYNAMIC=FALSE OMP_NUM_THREADS="$THREADS_PER_CASE" \
       OMP_PLACES=cores OMP_PROC_BIND=CLOSE \
-      taskset --cpu-list "$cpu_set" "$CAMPAIGN_EXECUTABLE" "$relative_parameter") \
+      taskset -c "$cpu_set" "$CAMPAIGN_EXECUTABLE" "$relative_parameter") \
       >"$log_file" 2>&1
   else
     (cd "$CAMPAIGN_ROOT" && \
